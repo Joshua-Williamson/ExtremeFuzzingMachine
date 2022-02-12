@@ -80,8 +80,10 @@ def process_data():
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f])
-        except subprocess.CalledProcessError:
-            print("find a crash")
+        except subprocess.CalledProcessError as e:
+            out=e.output
+            print('Weird afl-showmap, 1 exit code bug encountered') #JW DBG
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
         for line in out.splitlines():
             edge = line.split(b':')[0]
             tmp_cnt.append(edge)
