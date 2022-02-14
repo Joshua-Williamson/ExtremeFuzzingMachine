@@ -75,15 +75,17 @@ def process_data():
     for f in seed_list:
         tmp_list = []
         try:
+            infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
             if argvv[0] == './strip':
+                raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f])
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv ,stdin=infile)
+            infile.close()
         except subprocess.CalledProcessError as e:
-            out=e.output
-            print('Weird afl-showmap, 1 exit code bug encountered') #JW DBG
-            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+            print('Weird afl-showmap bug again') #JW DBG
+            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
         for line in out.splitlines():
             edge = line.split(b':')[0]
             tmp_cnt.append(edge)
@@ -386,6 +388,7 @@ def gen_grad(data):
 
 def setup_server():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, PORT))
     sock.listen(1)
     conn, addr = sock.accept()
