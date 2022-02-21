@@ -1858,8 +1858,8 @@ void fuzz_lop(char * grad_file, int sock){
                 printf("fast stage\n");
             }
             else{
-                send(sock,"sloww",5,0);
-                fast = 0;
+                send(sock,"sloww",5,0);/* Ahhh so this is why it has unsigned mutations, to stop it getting stuck */
+                fast = 0;              /* Has more random stuff built into it to get it unstuck!*/
                 printf("slow stage\n");
             }
         }
@@ -2022,6 +2022,38 @@ void main(int argc, char*argv[]){
          printf("num_index %d %d small %d medium %d large %d\n", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
          printf("mutation len: %ld\n", len);
          break;
+
+      case 'm': /* memory limit: use -m none option for ASAN */
+          if (!strcmp(optarg, "none")) {
+            mem_limit = 0;
+            break;
+          }
+
+          char suffix = 'M';
+          if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 || optarg[0] == '-') {
+            fprintf(stderr, "Bad syntax used for -m\n");
+            return -1;
+          }
+
+          switch (suffix) {
+            case 'T': mem_limit *= 1024 * 1024; break;
+            case 'G': mem_limit *= 1024; break;
+            case 'k': mem_limit /= 1024; break;
+            case 'M': break;
+            default:
+              fprintf(stderr, "Unsupported suffix or bad syntax for -m\n");
+              return -1;
+          }
+
+          if (mem_limit < 5) {
+            fprintf(stderr, "Dangerously low value of -m\n");
+            return -1;
+          }
+          if (sizeof(rlim_t) == 4 && mem_limit > 2000) {
+            fprintf(stderr, "Value of -m out of range on 32-bit systems\n");
+            return -1;
+          }
+          break;
       
     default:
         printf("no manual...");
