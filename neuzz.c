@@ -1986,7 +1986,7 @@ void start_fuzz_test(int f_len){
 
 void main(int argc, char*argv[]){
     int opt;
-    while ((opt = getopt(argc, argv, "+i:o:l:")) > 0)
+    while ((opt = getopt(argc, argv, "+i:o:l:m:")) > 0)
 
     switch (opt) {
 

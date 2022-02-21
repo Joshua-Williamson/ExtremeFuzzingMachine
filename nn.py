@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-
+#TO DO:
+#-Python 3.7-ify
+#-Add CLI/Config file for variables
+import argparse
 import os
 import sys
 import glob
@@ -20,14 +23,18 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout, Activation
 from keras.callbacks import ModelCheckpoint
 
+#Setting up ip and port for internal server
 HOST = '127.0.0.1'
 PORT = 12012
 
+#Max seed input file size allowed
 MAX_FILE_SIZE = 10000
 MAX_BITMAP_SIZE = 2000
 round_cnt = 0
 # Choose a seed for random initilzation
 # seed = int(time.time())
+
+#Fixed seed
 seed = 12
 np.random.seed(seed)
 random.seed(seed)
@@ -69,31 +76,36 @@ def process_data():
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
 
     # obtain raw bitmaps
-    raw_bitmap = {}
-    tmp_cnt = []
+    raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
+    tmp_cnt = [] #Hold's ID's cumlatively for each seed input
     out = ''
     for f in seed_list:
-        tmp_list = []
+        tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
             infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
+            mem_lim= '512' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv ,stdin=infile)
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
             print('Weird afl-showmap bug again') #JW DBG
             raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+
+        #Takes the first arg of each tuple generated 
+        #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
         for line in out.splitlines():
             edge = line.split(b':')[0]
             tmp_cnt.append(edge)
             tmp_list.append(edge)
         raw_bitmap[f] = tmp_list
-    counter = Counter(tmp_cnt).most_common()
+    counter = Counter(tmp_cnt).most_common() #Counts the occurances of each edge (ID) [('ID',No.),...] ordered in decending order 
 
     # save bitmaps to individual numpy label
+    # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
     label = [int(f[0]) for f in counter]
     bitmap = np.zeros((len(seed_list), len(label)))
     for idx, i in enumerate(seed_list):
@@ -103,6 +115,7 @@ def process_data():
                 bitmap[idx][label.index((int(j)))] = 1
 
     # label dimension reduction
+    # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
     fit_bitmap = np.unique(bitmap, axis=1)
     print("data dimension" + str(fit_bitmap.shape))
 
@@ -167,7 +180,7 @@ def train_generate(batch_size):
         np.random.shuffle(seed_list)
         # load a batch of training data
         for i in range(0, SPLIT_RATIO, batch_size):
-            # load full batch
+            # load full batch if batchsize is greater than the seeds availible
             if (i + batch_size) > SPLIT_RATIO:
                 x, y = generate_training_data(i, SPLIT_RATIO)
                 x = x.astype('float32') / 255
@@ -190,6 +203,7 @@ def vectorize_file(fl):
     return seed
 
 
+# Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
 # splice two seeds to a new seed
 def splice_seed(fl1, fl2, idxx):
     tmp1 = open(fl1, 'rb').read()
@@ -207,6 +221,8 @@ def splice_seed(fl1, fl2, idxx):
             tail = tmp2
         f_diff = 0
         l_diff = 0
+
+        #lenn is the longest seed 
         for i in range(lenn):
             if tmp1[i] != tmp2[i]:
                 f_diff = i
@@ -215,6 +231,8 @@ def splice_seed(fl1, fl2, idxx):
             if tmp1[i] != tmp2[i]:
                 l_diff = i
                 break
+
+        #Is this because the shorter inputs are null byte padded on the right ?
         if f_diff >= 0 and l_diff > 0 and (l_diff - f_diff) >= 2:
             splice_at = f_diff + random.randint(1, l_diff - f_diff - 1)
             head = list(head)
@@ -228,10 +246,11 @@ def splice_seed(fl1, fl2, idxx):
 
 
 # compute gradient for given input
+# taking gradient of randomly selected bitmap output at randomly selected input
 def gen_adv2(f, fl, model, layer_list, idxx, splice):
     adv_list = []
-    loss = layer_list[-2][1].output[:, f]
-    grads = K.gradients(loss, model.input)[0]
+    loss = layer_list[-2][1].output[:, f]   #Takes the output of the f entry of the bitmap classifaction. Of second dense layer...
+    grads = K.gradients(loss, model.input)[0]   #Takes gradient of loss w.r.t all NN input params.
     iterate = K.function([model.input], [loss, grads])
     ll = 2
     while fl[0] == fl[1]:
@@ -297,6 +316,9 @@ def gen_adv3(f, fl, model, layer_list, idxx, splice):
 
 # grenerate gradient information to guide furture muatation
 def gen_mutate2(model, edge_num, sign):
+    
+    #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
+    
     tmp_list = []
     # select seeds
     print("#######debug" + str(round_cnt))
@@ -305,7 +327,7 @@ def gen_mutate2(model, edge_num, sign):
     else:
         new_seed_list = new_seeds
 
-    if len(new_seed_list) < edge_num:
+    if len(new_seed_list) < edge_num: #2 X 500 random samples of seed list
         rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=True)]
     else:
         rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=False)]
@@ -323,7 +345,7 @@ def gen_mutate2(model, edge_num, sign):
 
     with open('gradient_info_p', 'w') as f:
         for idxx in range(len(interested_indice[:])):
-            # kears's would stall after multiple gradient compuation. Release memory and reload model to fix it.
+            # kears's would stall after multiple gradient compuation. Release memory and reload model to fix it. DBG.
             if idxx % 100 == 0:
                 del model
                 K.clear_session()
@@ -336,6 +358,8 @@ def gen_mutate2(model, edge_num, sign):
             fl = [rand_seed1[idxx], rand_seed2[idxx]]
             adv_list = fn(index, fl, model, layer_list, idxx, 1)
             tmp_list.append(adv_list)
+            #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
+            #bitmap and returns the gradients of each input byte w.r.t output 
             for ele in adv_list:
                 ele0 = [str(el) for el in ele[0]]
                 ele1 = [str(int(el)) for el in ele[1]]
@@ -344,17 +368,21 @@ def gen_mutate2(model, edge_num, sign):
 
 
 def build_model():
+    #Fixed batch size and epoch?
     batch_size = 32
-    num_classes = MAX_BITMAP_SIZE
-    epochs = 50
+    num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
+    epochs = 50                   #retrained on new bitmap sizes.
 
+    #Two FC layers with 
+    #MAX_FILE_SIZE -> FC -> 4096 -> RELU -> FC -> MAX_BITMAP_SIZE -> SIGMOID
     model = Sequential()
     model.add(Dense(4096, input_dim=MAX_FILE_SIZE))
     model.add(Activation('relu'))
     model.add(Dense(num_classes))
     model.add(Activation('sigmoid'))
 
-    opt = keras.optimizers.adam(lr=0.0001)
+    #Adams
+    opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
 
     model.compile(loss='binary_crossentropy', optimizer=opt, metrics=[accur_1])
     model.summary()
@@ -366,7 +394,7 @@ def train(model):
     loss_history = LossHistory()
     lrate = keras.callbacks.LearningRateScheduler(step_decay)
     callbacks_list = [loss_history, lrate]
-    model.fit_generator(train_generate(16),
+    model.fit_generator(train_generate(16), #BS of 16, fixed?
                         steps_per_epoch=(SPLIT_RATIO / 16 + 1),
                         epochs=100,
                         verbose=1, callbacks=callbacks_list)
@@ -381,18 +409,23 @@ def gen_grad(data):
     model = build_model()
     train(model)
     # model.load_weights('hard_label.h5')
-    gen_mutate2(model, 500, data[:5] == b"train")
+    gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
 
 def setup_server():
+    #Initalise server config
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #Such that the OS releases the port quicker for rapid rerunning
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    #Attatch to ip and port
     sock.bind((HOST, PORT))
+    #Waits for neuzz execution
     sock.listen(1)
     conn, addr = sock.accept()
-    print('connected by neuzz execution moduel ' + str(addr))
+    print('Connected by Neuzz execution module ' + str(addr))
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
@@ -406,4 +439,17 @@ def setup_server():
 
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description="""Runs the background machine
+                        learning process for Neuzz.""")
+
+    parser.add_argument('-e',
+                        '--enable-asan',
+                        help='Enable ASAN (runs afl-showmap with -m none)',
+                        default=False,
+                        action='store_true')
+
+    parser.add_argument('target', nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    #Start program and spin up server
     setup_server()
