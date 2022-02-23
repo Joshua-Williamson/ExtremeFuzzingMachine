@@ -20,7 +20,7 @@ import keras.backend as K
 from collections import Counter
 from tensorflow import set_random_seed
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
+from keras.layers import Dense, Dropout, Activation, Lambda
 from keras.callbacks import ModelCheckpoint
 
 #Setting up ip and port for internal server
@@ -245,44 +245,55 @@ def splice_seed(fl1, fl2, idxx):
         randd = random.choice(seed_list)
 
 
+def get_hessian(model,inputs):
+    inputs =tf.convert_to_tensor(inputs)
+    loss=tf.reduce_sum(model(inputs))
+    return tf.hessians(loss,inputs)
+
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
 def gen_adv2(f, fl, model, layer_list, idxx, splice):
     adv_list = []
     loss = layer_list[-2][1].output[:, f]   #Takes the output of the f entry of the bitmap classifaction. Of second dense layer...
-    grads = K.gradients(loss, model.input)[0]   #Takes gradient of loss w.r.t all NN input params.
-    iterate = K.function([model.input], [loss, grads])
+    dl_dx = K.gradients(loss, model.input)[0]
+    d2l_dx2= K.gradients(dl_dx, model.input)[0]   #Takes gradient of loss w.r.t all NN input params.   
+    iterate = K.function([model.input], [loss, dl_dx,d2l_dx2])
     ll = 2
     while fl[0] == fl[1]:
         fl[1] = random.choice(seed_list)
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        loss_value, grads_value = iterate([x])
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        val = np.sign(grads_value[0][idx])
-        adv_list.append((idx, val, fl[index]))
+        loss_value, dl_dx_value,d2l_dx2_value = iterate([x])
+        idx = np.flip(np.argsort(np.absolute(dl_dx_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+        val_1 = np.sign(dl_dx_value[0][idx])
+        val_2 = np.sign(d2l_dx2_value[0][idx])
+
+        adv_list.append((idx, val_1, val_2, fl[index]))
 
     # do not generate spliced seed for the first round
     if splice == 1 and round_cnt != 0:
         if round_cnt % 2 == 0:
             splice_seed(fl[0], fl[1], idxx)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            loss_value, grads_value = iterate([x])
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
+            loss_value, dl_dx_value,d2l_dx2_value = iterate([x])
+            idx = np.flip(np.argsort(np.absolute(dl_dx_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+            val_1 = np.sign(dl_dx_value[0][idx])
+            val_2 = np.sign(d2l_dx2_value[0][idx])
+
+            adv_list.append((idx, val_1,val_2, './splice_seeds/tmp_' + str(idxx)))
         else:
             splice_seed(fl[0], fl[1], idxx + 500)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
-            loss_value, grads_value = iterate([x])
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
+            loss_value, dl_dx_value,d2l_dx2_value = iterate([x])
+            idx = np.flip(np.argsort(np.absolute(dl_dx_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+            val_1 = np.sign(dl_dx_value[0][idx])
+            val_2 = np.sign(d2l_dx2_value[0][idx])
+            adv_list.append((idx, val_1, val_2,'./splice_seeds/tmp_' + str(idxx + 500)))
 
     return adv_list
 
-
+# Second order grads dont really matter for stochastic runs as your trying to get it out the loop anyway
 # compute gradient for given input without sign
 def gen_adv3(f, fl, model, layer_list, idxx, splice):
     adv_list = []
@@ -363,8 +374,10 @@ def gen_mutate2(model, edge_num, sign):
             for ele in adv_list:
                 ele0 = [str(el) for el in ele[0]]
                 ele1 = [str(int(el)) for el in ele[1]]
-                ele2 = ele[2]
-                f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + "\n")
+                ele2 = [str(int(el)) for el in ele[2]]
+
+                ele3 = ele[3]
+                f.write(",".join(ele0) + '|' + ",".join(ele1)+ '|' + ",".join(ele2)  + '|' + ele3 + "\n")
 
 
 def build_model():
