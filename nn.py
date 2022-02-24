@@ -47,7 +47,7 @@ argvv = sys.argv[1:]
 
 
 # process training data from afl raw data
-def process_data():
+def process_data(data):
     global MAX_BITMAP_SIZE
     global MAX_FILE_SIZE
     global SPLIT_RATIO
@@ -69,11 +69,18 @@ def process_data():
     max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
+    if data == b"sloww":
+        seed_list+=glob.glob('./nocov/*')
+        new_seeds+=glob.glob('./nocov/id_*')
+        max_file_name = call(['ls', '-S', cwd + '/nocov/']).decode('utf8').split('\n')[0].rstrip('\n')
+        MAX_FILE_SIZENC = os.path.getsize(cwd + '/nocov/' + max_file_name)
+        MAX_FILE_SIZE=max(MAX_FILE_SIZE,MAX_FILE_SIZENC)
+
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
-    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
-    os.path.isdir("./crashes/") or os.makedirs("./crashes")
+    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds") #variseeds doesnt actally seem to get used 
+    os.path.isdir("./nocov/") or os.makedirs("./nocov")
 
     # obtain raw bitmaps
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
@@ -405,7 +412,7 @@ def train(model):
 def gen_grad(data):
     global round_cnt
     t0 = time.time()
-    process_data()
+    process_data(data)
     model = build_model()
     train(model)
     # model.load_weights('hard_label.h5')

@@ -1508,7 +1508,14 @@ void gen_mutate_slow(){
                 close(mut_fd);
                 mut_cnt = mut_cnt + 1;
             }
-            
+            else if(count_seeds("nocov","+nocov") < 300 && rand() % 2000000 == 1){
+                char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
+                int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+                ck_write(mut_fd, out_buf1, len, mut_fn);
+                free(mut_fn);
+                close(mut_fd);
+                mut_cnt = mut_cnt + 1;
+            }    
         }
         
         /* low direction mutation(up to 255) */
@@ -1566,7 +1573,14 @@ void gen_mutate_slow(){
                 free(mut_fn);
                 mut_cnt = mut_cnt + 1;
             }
-            
+            else if(count_seeds("nocov","+nocov") < 300 && rand() % 2000000 == 1){
+                char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
+                int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+                ck_write(mut_fd, out_buf1, len, mut_fn);
+                free(mut_fn);
+                close(mut_fd);
+                mut_cnt = mut_cnt + 1;
+            }     
         }
     }
     
@@ -1825,6 +1839,28 @@ void copy_seeds(char * in_dir, char * out_dir){
     return ;
 }
 
+/*Will count number of no coverage files*/
+int count_seeds(char in_dir, char filter_str){
+    int file_count = 0;
+    DIR * dirp;
+    struct dirent * entry;
+
+    dirp = opendir(in_dir);
+    
+    if (!dirp) {
+      perror("Cannot open directory");
+      return;
+    }
+
+    while ((entry = readdir(dirp)) != NULL) {
+        if (entry->d_type == DT_REG  && strstr(entry->d_name,filter_str) == NULL ) { /* If the entry is a regular file and has prefix*/
+            file_count++;
+        }
+    }
+    closedir(dirp);
+    return file_count;
+}
+
 /* parse the gradient to guide fuzzing */
 void fuzz_lop(char * grad_file, int sock){
     dry_run("./splice_seeds/", 1); 
@@ -2072,6 +2108,7 @@ void main(int argc, char*argv[]){
     
     copy_seeds(in_dir, out_dir);
     init_forkserver(argv+optind);
+    srand(time(NULL));
    
     start_fuzz(len);   
     printf("total execs %ld edge coverage %d.\n", total_execs, count_non_255_bytes(virgin_bits));
