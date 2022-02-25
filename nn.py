@@ -81,6 +81,10 @@ def process_data(data):
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds") #variseeds doesnt actally seem to get used 
     os.path.isdir("./nocov/") or os.makedirs("./nocov")
+    files = glob.glob('./nocov/*')
+    for f in files:
+        os.remove(f)
+
 
     # obtain raw bitmaps
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
@@ -397,7 +401,7 @@ def build_model():
     return model
 
 
-def train(model):
+def train(model,data):
     loss_history = LossHistory()
     lrate = keras.callbacks.LearningRateScheduler(step_decay)
     callbacks_list = [loss_history, lrate]
@@ -407,14 +411,22 @@ def train(model):
                         verbose=1, callbacks=callbacks_list)
     # Save model and weights
     model.save_weights("hard_label.h5")
-
+    #Deletes nocov seeds from seed list and clears nocov directory
+    if data == b"sloww":
+        global seed_list
+        global new_seeds
+        seed_list = glob.glob('./seeds/*')
+        new_seeds = glob.glob('./seeds/id_*')
+        files = glob.glob('./nocov/*')
+        for f in files:
+            os.remove(f)
 
 def gen_grad(data):
     global round_cnt
     t0 = time.time()
     process_data(data)
     model = build_model()
-    train(model)
+    train(model,data)
     # model.load_weights('hard_label.h5')
     gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
