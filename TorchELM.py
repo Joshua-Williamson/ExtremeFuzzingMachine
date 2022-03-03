@@ -98,10 +98,8 @@ class pseudoInverse(object):
 
         self.w.data = w.t().data
 
-    def train(self,inputs,targets, oneHotVectorize=True):
+    def train(self,inputs,targets):
         targets = targets.view(targets.size(0),-1)
-        if oneHotVectorize:
-            targets=self.oneHotVectorize(targets=targets)
         numSamples=inputs.size()[0]
         dimInput=inputs.size()[1]
         dimTarget=targets.size()[1]
@@ -110,42 +108,3 @@ class pseudoInverse(object):
             self.pseudoBig(inputs,targets)
         else:
             self.pseudoSmall(inputs,targets)
-
-
-
-    def train_sequential(self,inputs,targets):
-        oneHotTarget = self.oneHotVectorize(targets=targets)
-        numSamples = inputs.size()[0]
-        dimInput = inputs.size()[1]
-        dimTarget = oneHotTarget.size()[1]
-
-        if numSamples<dimInput:
-            I1 = Variable(torch.eye(dimInput))
-            if self.is_cuda:
-                I1 = I1.cuda()
-            xtx=torch.mm(inputs.t(),inputs)
-            self.M=Variable(torch.inverse(xtx.data+self.C*I1.data),requires_grad=True, volatile=False)
-
-        I = Variable(torch.eye(numSamples))
-        if self.is_cuda:
-            I = I.cuda()
-
-        self.M = (1/self.forgettingfactor) * self.M - torch.mm((1/self.forgettingfactor) * self.M,
-                                             torch.mm(inputs.t(), torch.mm(Variable(torch.inverse(I.data + torch.mm(inputs, torch.mm((1/self.forgettingfactor)* self.M, inputs.t())).data),requires_grad=True, volatile=False),
-                                             torch.mm(inputs, (1/self.forgettingfactor)* self.M))))
-
-
-        self.w.data += torch.mm(self.M,torch.mm(inputs.t(),oneHotTarget - torch.mm(inputs,self.w.t()))).t().data
-
-
-    def oneHotVectorize(self,targets):
-        oneHotTarget=torch.zeros(targets.size()[0],int(targets.max().item())+1)
-
-        for i in range(targets.size()[0]):
-            oneHotTarget[i][int(targets[i].item())]=1
-
-        if self.is_cuda:
-            oneHotTarget=oneHotTarget.cuda()
-        oneHotTarget=Variable(oneHotTarget,requires_grad=True, volatile=False)
-
-        return oneHotTarget

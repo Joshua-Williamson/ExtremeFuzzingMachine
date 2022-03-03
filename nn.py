@@ -169,6 +169,8 @@ def vectorize_file(fl):
         tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
     seed[0] = [j for j in bytearray(tmp)]
     seed = seed.astype('float32') / 255
+    seed = torch.from_numpy(seed)
+    seed.requires_grad=True
     return seed
 
 
@@ -224,8 +226,8 @@ def gen_adv2(f, fl, model, idxx, splice):
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        out = model.forward_to_sig(x)[f]
-        grads_value = torch.autograd(out,input)
+        out = model.forward_to_sig(x)[:,f]
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         val = np.sign(grads_value[0][idx])
         adv_list.append((idx, val, fl[index]))
@@ -235,14 +237,16 @@ def gen_adv2(f, fl, model, idxx, splice):
         if round_cnt % 2 == 0:
             splice_seed(fl[0], fl[1], idxx)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            loss_value, grads_value = iterate([x])
+            out = model.forward_to_sig(x)[:,f]
+            grads_value = torch.autograd.grad(out,x).numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
         else:
             splice_seed(fl[0], fl[1], idxx + 500)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
-            loss_value, grads_value = iterate([x])
+            out = model.forward_to_sig(x)[:,f]
+            grads_value = torch.autograd.grad(out,x).numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
@@ -251,18 +255,16 @@ def gen_adv2(f, fl, model, idxx, splice):
 
 
 # compute gradient for given input without sign
-def gen_adv3(f, fl, model, layer_list, idxx, splice):
+def gen_adv3(f, fl, model, idxx, splice):
     adv_list = []
-    loss = layer_list[-2][1].output[:, f]
-    grads = K.gradients(loss, model.input)[0]
-    iterate = K.function([model.input], [loss, grads])
     ll = 2
     while fl[0] == fl[1]:
         fl[1] = random.choice(seed_list)
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        loss_value, grads_value = iterate([x])
+        out = model.forward_to_sig(x)[:,f]
+        grads_value = torch.autograd.grad(out,x).numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         #val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -272,7 +274,8 @@ def gen_adv3(f, fl, model, layer_list, idxx, splice):
     if splice == 1 and round_cnt != 0:
         splice_seed(fl[0], fl[1], idxx)
         x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        loss_value, grads_value = iterate([x])
+        out = model.forward_to_sig(x)[:,f]
+        grads_value = torch.autograd.grad(out,x).numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         # val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -344,9 +347,8 @@ def train(model,optimizer):
     batch_size=16
     init = time.time()
     model.train()
-    correct = 0
     for batch_idx, (data, target) in enumerate(train_generate(batch_size)):
-        if args.cuda:
+        if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=True, volatile=False), \
                        Variable(target.type(torch.float32),requires_grad=True, volatile=False)
@@ -354,7 +356,7 @@ def train(model,optimizer):
         optimizer.train(inputs=hiddenOut, targets=target)
         output = model.forward(data)
         pred=output.data.max(1)[1]
-        correct += pred.eq(target.data).cpu().sum()
+
     ending = time.time()
     print('training time: {:.2f}sec'.format(ending - init))
 
@@ -380,8 +382,9 @@ def setup_server():
     sock.bind((HOST, PORT))
     #Waits for neuzz execution
     sock.listen(1)
+    print("Waiting for neuzz engine")
     conn, addr = sock.accept()
-    print('Connected by Neuzz execution module ' + str(addr))
+    print('Connected by neuzz engine ' + str(addr))
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
