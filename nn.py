@@ -341,7 +341,15 @@ def build_model():
     optimizer= pseudoInverse(params=model.parameters(),C=0.001,L=0)
 
     return model,optimizer
-
+#Do testing....
+# compute jaccard accuracy for multiple label
+def accur_1(y_true, y_pred):
+    y_true = tf.round(y_true)
+    pred = tf.round(y_pred)
+    summ = tf.constant(MAX_BITMAP_SIZE, dtype=tf.float32)
+    wrong_num = tf.subtract(summ, tf.reduce_sum(tf.cast(tf.equal(y_true, pred), tf.float32), axis=-1))
+    right_1_num = tf.reduce_sum(tf.cast(tf.logical_and(tf.cast(y_true, tf.bool), tf.cast(pred, tf.bool)), tf.float32), axis=-1)
+    return K.mean(tf.divide(right_1_num, tf.add(right_1_num, wrong_num)))
 
 def train(model,optimizer):
     batch_size=16
