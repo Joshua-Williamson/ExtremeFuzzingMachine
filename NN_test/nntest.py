@@ -34,7 +34,6 @@ np.random.seed(seed)
 random.seed(seed)
 seed_list = glob.glob('./seeds/*')
 new_seeds = glob.glob('./seeds/id_*')
-SPLIT_RATIO = len(seed_list)
 # get binary argv
 argvv = sys.argv[1:]
 
@@ -43,7 +42,8 @@ argvv = sys.argv[1:]
 def process_data():
     global MAX_BITMAP_SIZE
     global MAX_FILE_SIZE
-    global SPLIT_RATIO
+    global train_len
+    global test_len
     global seed_list
     global test_seed_list
     global train_seed_list
@@ -51,10 +51,13 @@ def process_data():
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
     seed_list.sort()
+    TTR=2/3
     SPLIT_RATIO = int(len(seed_list)*TTR)
     np.random.shuffle(seed_list)
-    test_seed_list=seed_list[:SPLIT_RATIO]
-    train_seed_list=seed_list[SPLIT_RATIO:]
+    train_seed_list=seed_list[:SPLIT_RATIO]
+    test_seed_list=seed_list[SPLIT_RATIO:]
+    train_len=len(train_seed_list)
+    test_len=len(test_seed_list)
     call = subprocess.check_output
 
     # get MAX_FILE_SIZE
@@ -63,8 +66,8 @@ def process_data():
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
-    os.path.isdir("./train_bitmaps/") or os.makedirs("./bitmaps")
-    os.path.isdir("./test_bitmaps/") or os.makedirs("./bitmaps")
+    os.path.isdir("./train_bitmaps/") or os.makedirs("./train_bitmaps")
+    os.path.isdir("./test_bitmaps/") or os.makedirs("./test_bitmaps")
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
@@ -73,7 +76,7 @@ def process_data():
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
     tmp_cnt = [] #Hold's ID's cumlatively for each seed input
     out = ''
-    for f in train_seed_list:
+    for f in seed_list:
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
             infile=open(f,'r')
@@ -101,8 +104,8 @@ def process_data():
     # save bitmaps to individual numpy label
     # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
     label = [int(f[0]) for f in counter]
-    bitmap = np.zeros((len(train_seed_list), len(label)))
-    for idx, i in enumerate(train_seed_list):
+    bitmap = np.zeros((len(seed_list), len(label)))
+    for idx, i in enumerate(seed_list):
         tmp = raw_bitmap[i]
         for j in tmp:
             if int(j) in label:
@@ -111,64 +114,18 @@ def process_data():
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
     fit_bitmap = np.unique(bitmap, axis=1)
-    print("data dimension" + str(fit_bitmap.shape))
+    print("Data dimension" + str(fit_bitmap.shape))
 
     # save training data
     MAX_BITMAP_SIZE = fit_bitmap.shape[1]
-    for idx, i in enumerate(train_seed_list):
+    for trn_idx, i in enumerate(train_seed_list):
         file_name = "./train_bitmaps/" + i.split('/')[-1]
-        np.save(file_name, fit_bitmap[idx])
+        np.save(file_name, fit_bitmap[trn_idx])
 
-    # obtain raw bitmaps
-    raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
-    tmp_cnt = [] #Hold's ID's cumlatively for each seed input
-    out = ''
-    for f in test_seed_list:
-        tmp_list = [] #Keeps list of ID's for each seed file inside loop
-        try:
-            infile=open(f,'r')
-            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '512' if not args.enable_asan else 'none'
-            if argvv[0] == './strip':
-                raise NotImplementedError
-                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
-            else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
-            infile.close()
-        except subprocess.CalledProcessError as e:
-            print('Weird afl-showmap bug again') #JW DBG
-            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
-
-        #Takes the first arg of each tuple generated 
-        #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
-        for line in out.splitlines():
-            edge = line.split(b':')[0]
-            tmp_cnt.append(edge)
-            tmp_list.append(edge)
-        raw_bitmap[f] = tmp_list
-    counter = Counter(tmp_cnt).most_common() #Counts the occurances of each edge (ID) [('ID',No.),...] ordered in decending order 
-
-    # save bitmaps to individual numpy label
-    # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
-    label = [int(f[0]) for f in counter]
-    bitmap = np.zeros((len(test_seed_list), len(label)))
-    for idx, i in enumerate(test_seed_list):
-        tmp = raw_bitmap[i]
-        for j in tmp:
-            if int(j) in label:
-                bitmap[idx][label.index((int(j)))] = 1
-
-    # label dimension reduction
-    # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
-    print("data dimension" + str(fit_bitmap.shape))
-
-    # save training data
-    MAX_BITMAP_SIZE = fit_bitmap.shape[1]
-    for idx, i in enumerate(test_seed_list):
+    for tst_idx, i in enumerate(test_seed_list):
+        tst_idx+=trn_idx
         file_name = "./test_bitmaps/" + i.split('/')[-1]
-        np.save(file_name, fit_bitmap[idx])
-
+        np.save(file_name, fit_bitmap[tst_idx])
 
 # training data generator
 def generate_training_data(tt,lb, ub):
@@ -205,14 +162,19 @@ def step_decay(epoch):
 def train_generate(tt,batch_size):
 
     # load a batch of training data
+    if tt=='train':
+        SPLIT_RATIO=train_len
+    if tt=='test':
+        SPLIT_RATIO=test_len
+
     for i in range(0, SPLIT_RATIO, batch_size):
         # load full batch if batchsize is greater than the seeds availible
         if (i + batch_size) > SPLIT_RATIO:
-            x, y = generate_training_data(i, SPLIT_RATIO,tt)
+            x, y = generate_training_data(tt,i, SPLIT_RATIO)
             x = x.astype('float32') / 255
         # load remaining data for last batch
         else:
-            x, y = generate_training_data(i, i + batch_size,tt)
+            x, y = generate_training_data(tt,i, i + batch_size)
             x = x.astype('float32') / 255
         yield (torch.Tensor(x), torch.Tensor(y))
 
@@ -288,17 +250,17 @@ def build_model():
 
 def accur_1(y_true, y_pred):
     y_true = torch.round(y_true)
-    pred = torch.round(y_pred)
-    summ = torch.float32(MAX_BITMAP_SIZE)
-    wrong_num = torch.subtract(summ, torch.sum(torch.float32(torch.equal(y_true, pred)), dim=-1))
-    right_1_num = torch.sum(torch.float32(torch.logical_and(torch.bool(y_true), torch.bool(pred))), axis=-1)
-    return torch.mean(torch.divide(right_1_num, torch.add(right_1_num, wrong_num)))
+    pred =torch.round(y_pred) 
+    summ = MAX_BITMAP_SIZE
+    right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
+    wrong_num = summ-right_num
+    return torch.mean(right_num/(right_num+wrong_num))
 
 def train(model,optimizer):
     batch_size=16
     init = time.time()
     model.train()
-    for batch_idx, (data, target) in enumerate(train_generate(batch_size,tt='train')):
+    for batch_idx, (data, target) in enumerate(train_generate(tt='train',batch_size=batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=True, volatile=False), \
@@ -306,23 +268,23 @@ def train(model,optimizer):
         hiddenOut = model.forwardToHidden(data)
         optimizer.train(inputs=hiddenOut, targets=target)
         output = model.forward(data)
-        pred=output.data.max(1)[1]
+        pred=output
         acc=accur_1(target,pred)
 
     ending = time.time()
     print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
 
 def test(model):
-    batch_size=16
+    batch_size=len(test_seed_list)
     init = time.time()
     model.train()
-    for batch_idx, (data, target) in enumerate(train_generate(batch_size,tt='test')):
+    for batch_idx, (data, target) in enumerate(train_generate(tt='test',batch_size=batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=True, volatile=False), \
                        Variable(target.type(torch.float32),requires_grad=True, volatile=False)
         output = model.forward(data)
-        pred=output.data.max(1)[1]
+        pred=output
         acc=accur_1(target,pred)
 
     ending = time.time()
@@ -334,10 +296,11 @@ def gen_grad(data):
     global round_cnt
     t0 = time.time()
     process_data()
+    print("Bitmap generating time: {:.2f}".format(time.time()-t0))
     model,optimiser = build_model()
     train(model,optimiser)
-    test(model,optimiser)
-    print(time.time() - t0)
+    test(model)
+    print("Total pre-process time: {:.2f}".format(time.time() - t0))
 
 
 if __name__ == '__main__':
@@ -361,4 +324,4 @@ if __name__ == '__main__':
     global args
     args = parser.parse_args()
     #Start program and spin up server
-    gen_grad()
+    gen_grad(data=b'train')
