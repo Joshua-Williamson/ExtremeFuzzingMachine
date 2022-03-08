@@ -7,15 +7,19 @@ import sys
 import glob
 import math
 import time
+import keras
 import random
 import socket
 import subprocess
 import numpy as np
+import tensorflow as tf
+import keras.backend as K
 from collections import Counter
+from tensorflow import set_random_seed
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation
+from keras.callbacks import ModelCheckpoint
 
-import torch
-from torch.autograd import Variable
-from TorchELM import ELM,pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
@@ -116,6 +120,8 @@ def process_data():
     fit_bitmap = np.unique(bitmap, axis=1)
     print("Data dimension" + str(fit_bitmap.shape))
 
+    trn_idx=0
+
     # save training data
     MAX_BITMAP_SIZE = fit_bitmap.shape[1]
     for trn_idx, i in enumerate(train_seed_list):
@@ -123,32 +129,45 @@ def process_data():
         np.save(file_name, fit_bitmap[trn_idx])
 
     for tst_idx, i in enumerate(test_seed_list):
-        tst_idx+=trn_idx
+        tst_idx=trn_idx+tst_idx
         file_name = "./test_bitmaps/" + i.split('/')[-1]
         np.save(file_name, fit_bitmap[tst_idx])
 
 # training data generator
-def generate_training_data(tt,lb, ub):
-    if tt=='test':
-        list=test_seed_list
-        stub="./test_bitmaps/"
-    elif tt=='train': 
-        list=train_seed_list
-        stub="./train_bitmaps/"
+def generate_training_data(lb, ub):
         
     seed = np.zeros((ub - lb, MAX_FILE_SIZE))
     bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
     for i in range(lb, ub):
-        tmp = open(list[i], 'rb').read()
+        tmp = open(train_seed_list[i], 'rb').read()
         ln = len(tmp)
         if ln < MAX_FILE_SIZE:
             tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
         seed[i - lb] = [j for j in bytearray(tmp)]
 
     for i in range(lb, ub):
-        file_name = stub + list[i].split('/')[-1] + ".npy"
+        file_name = "./train_bitmaps/" + train_seed_list[i].split('/')[-1] + ".npy"
         bitmap[i - lb] = np.load(file_name)
     return seed, bitmap
+
+
+# training data generator
+def generate_testing_data(lb, ub):
+       
+    seed = np.zeros((ub - lb, MAX_FILE_SIZE))
+    bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
+    for i in range(lb, ub):
+        tmp = open(test_seed_list[i], 'rb').read()
+        ln = len(tmp)
+        if ln < MAX_FILE_SIZE:
+            tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
+        seed[i - lb] = [j for j in bytearray(tmp)]
+
+    for i in range(lb, ub):
+        file_name = "./test_bitmaps/" + test_seed_list[i].split('/')[-1] + ".npy"
+        bitmap[i - lb] = np.load(file_name)
+    return seed, bitmap
+
 
 
 # learning rate decay
@@ -158,25 +177,55 @@ def step_decay(epoch):
     epochs_drop = 10.0
     lrate = initial_lrate * math.pow(drop, math.floor((1 + epoch) / epochs_drop))
     return lrate
+class LossHistory(keras.callbacks.Callback):
 
-def train_generate(tt,batch_size):
+    def on_train_begin(self, logs={}):
+        self.losses = []
+        self.lr = []
 
-    # load a batch of training data
-    if tt=='train':
-        SPLIT_RATIO=train_len
-    if tt=='test':
-        SPLIT_RATIO=test_len
+    def on_epoch_end(self, batch, logs={}):
+        self.losses.append(logs.get('loss'))
+        self.lr.append(step_decay(len(self.losses)))
+        print(step_decay(len(self.losses)))
 
-    for i in range(0, SPLIT_RATIO, batch_size):
-        # load full batch if batchsize is greater than the seeds availible
-        if (i + batch_size) > SPLIT_RATIO:
-            x, y = generate_training_data(tt,i, SPLIT_RATIO)
-            x = x.astype('float32') / 255
-        # load remaining data for last batch
-        else:
-            x, y = generate_training_data(tt,i, i + batch_size)
-            x = x.astype('float32') / 255
-        yield (torch.Tensor(x), torch.Tensor(y))
+
+# compute jaccard accuracy for multiple label
+def accur_1(y_true, y_pred):
+    y_true = tf.round(y_true)
+    pred = tf.round(y_pred)
+    summ = tf.constant(MAX_BITMAP_SIZE, dtype=tf.float32)
+    wrong_num = tf.subtract(summ, tf.reduce_sum(tf.cast(tf.equal(y_true, pred), tf.float32), axis=-1))
+    right_1_num = tf.reduce_sum(tf.cast(tf.logical_and(tf.cast(y_true, tf.bool), tf.cast(pred, tf.bool)), tf.float32), axis=-1)
+    return K.mean(tf.divide(right_1_num, tf.add(right_1_num, wrong_num)))
+
+def train_generate(batch_size):
+    global train_seed_list
+    while 1:
+        for i in range(0, train_len, batch_size):
+            # load full batch if batchsize is greater than the seeds availible
+            if (i + batch_size) > train_len:
+                x, y = generate_training_data(i, train_len)
+                x = x.astype('float32') / 255
+            # load remaining data for last batch
+            else:
+                x, y = generate_training_data(i, i + batch_size)
+                x = x.astype('float32') / 255
+            yield (x,y)
+
+
+def test_generate(batch_size):
+    
+    while 1:
+        for i in range(0, test_len, batch_size):
+            # load full batch if batchsize is greater than the seeds availible
+            if (i + batch_size) > test_len:
+                x, y = generate_testing_data(i, test_len)
+                x = x.astype('float32') / 255
+            # load remaining data for last batch
+            else:
+                x, y = generate_testing_data(i, i + batch_size)
+                x = x.astype('float32') / 255
+            yield (x,y)
 
 
 # get vector representation of input
@@ -188,8 +237,6 @@ def vectorize_file(fl):
         tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
     seed[0] = [j for j in bytearray(tmp)]
     seed = seed.astype('float32') / 255
-    seed = torch.from_numpy(seed)
-    seed.requires_grad=True
     return seed
 
 
@@ -240,56 +287,39 @@ def build_model():
     num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
     epochs = 50                   #retrained on new bitmap sizes.
 
-    model = ELM(input_size=MAX_FILE_SIZE,output_size=num_classes,hidden_size=4096,activation='relu')
-    if args.enable_cuda:
-        model.cuda()
+    #Two FC layers with 
+    #MAX_FILE_SIZE -> FC -> 4096 -> RELU -> FC -> MAX_BITMAP_SIZE -> SIGMOID
+    model = Sequential()
+    model.add(Dense(4096, input_dim=MAX_FILE_SIZE))
+    model.add(Activation('relu'))
+    model.add(Dense(num_classes))
+    model.add(Activation('sigmoid'))
 
-    optimizer= pseudoInverse(params=model.parameters(),C=0.001,L=0)
+    #Adams
+    opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
 
-    return model,optimizer
+    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=[accur_1])
+    model.summary()
 
-def accur_1(y_true, y_pred):
-    y_true = torch.round(y_true)
-    pred =torch.round(y_pred) 
-    summ = MAX_BITMAP_SIZE
-    right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
-    wrong_num = summ-right_num
-    return torch.mean(right_num/(right_num+wrong_num))
+    return model
 
-def train(model,optimizer):
-    batch_size=16
-    init = time.time()
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_generate(tt='train',batch_size=batch_size)):
-        if args.enable_cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data,requires_grad=True, volatile=False), \
-                       Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        hiddenOut = model.forwardToHidden(data)
-        optimizer.train(inputs=hiddenOut, targets=target)
-        output = model.forward(data)
-        pred=output
-        acc=accur_1(target,pred)
 
-    ending = time.time()
-    print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
-
-def test(model):
-    batch_size=len(test_seed_list)
-    init = time.time()
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_generate(tt='test',batch_size=batch_size)):
-        if args.enable_cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data,requires_grad=True, volatile=False), \
-                       Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        output = model.forward(data)
-        pred=output
-        acc=accur_1(target,pred)
-
-    ending = time.time()
-    print('Testing time: {:.2f}sec/ Testing Accuracy: {:.2f}'.format(ending - init, acc))
-
+def train(model):
+    st=time.time()
+    loss_history = LossHistory()
+    lrate = keras.callbacks.LearningRateScheduler(step_decay)
+    callbacks_list = [loss_history, lrate]
+    hist=model.fit_generator(train_generate(16), #BS of 16, fixed?
+                        steps_per_epoch=(train_len / 16 + 1),
+                        epochs=50,
+                        verbose=1, callbacks=callbacks_list,
+                        validation_data=train_generate(batch_size=16),
+                        validation_steps=(test_len / 16 + 1))
+    # Save model and weights
+    model.save_weights("hard_label.h5")
+    #plot_acc(hist)
+    ft=time.time()-st
+    print("Finished training in: {:.2f}".format(ft))
 
 
 def gen_grad(data):
@@ -297,9 +327,9 @@ def gen_grad(data):
     t0 = time.time()
     process_data()
     print("Bitmap generating time: {:.2f}".format(time.time()-t0))
-    model,optimiser = build_model()
-    train(model,optimiser)
-    test(model)
+    model = build_model()
+    train(model)
+
     print("Total pre-process time: {:.2f}".format(time.time() - t0))
 
 
