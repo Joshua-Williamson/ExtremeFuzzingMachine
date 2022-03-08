@@ -1,0 +1,365 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import json
+import argparse
+import os
+import sys
+import glob
+import math
+import time
+import keras
+import random
+import socket
+import subprocess
+import numpy as np
+import tensorflow as tf
+import keras.backend as K
+from collections import Counter
+from tensorflow import set_random_seed
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation
+from keras.callbacks import ModelCheckpoint
+
+
+#Setting up ip and port for internal server
+HOST = '127.0.0.1'
+PORT = 12012
+
+# process training data from afl raw data
+def process_data(target):
+    global MAX_BITMAP_SIZE
+    global MAX_FILE_SIZE
+    global train_len
+    global test_len
+    global seed_list
+    global test_seed_list
+    global train_seed_list
+
+    #Max seed input file size allowed
+    MAX_FILE_SIZE = 10000
+    MAX_BITMAP_SIZE = 2000
+    round_cnt = 0
+    # Choose a seed for random initilzation
+    # seed = int(time.time())
+
+    #Fixed seed
+    seed = 12
+    np.random.seed(seed)
+    random.seed(seed)
+    # get binary argv
+    argvv = sys.argv[1:]
+
+    # shuffle training samples
+    seed_list = glob.glob('./seeds/*')
+    seed_list.sort()
+    TTR=2./3.
+    SPLIT_RATIO = int(len(seed_list)*TTR)
+    np.random.shuffle(seed_list)
+    train_seed_list=seed_list[:SPLIT_RATIO]
+    test_seed_list=seed_list[SPLIT_RATIO:]
+    train_len=len(train_seed_list)
+    test_len=len(test_seed_list)
+    call = subprocess.check_output
+
+    # get MAX_FILE_SIZE
+    cwd = os.getcwd()
+    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
+    MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
+
+    # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
+    os.path.isdir("./train_bitmaps/") or os.makedirs("./train_bitmaps")
+    os.path.isdir("./test_bitmaps/") or os.makedirs("./test_bitmaps")
+    os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
+    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
+    os.path.isdir("./crashes/") or os.makedirs("./crashes")
+
+    # obtain raw bitmaps
+    raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
+    tmp_cnt = [] #Hold's ID's cumlatively for each seed input
+    out = ''
+    for f in seed_list:
+        tmp_list = [] #Keeps list of ID's for each seed file inside loop
+        try:
+            infile=open(f,'r')
+            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
+            mem_lim= '512' if not enable_asan else 'none'
+            out = call(['./../afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + [target] ,stdin=infile)
+            infile.close()
+        except subprocess.CalledProcessError as e:
+            print('Weird afl-showmap bug again') #JW DBG
+            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+
+        #Takes the first arg of each tuple generated 
+        #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
+        for line in out.splitlines():
+            edge = line.split(b':')[0]
+            tmp_cnt.append(edge)
+            tmp_list.append(edge)
+        raw_bitmap[f] = tmp_list
+    counter = Counter(tmp_cnt).most_common() #Counts the occurances of each edge (ID) [('ID',No.),...] ordered in decending order 
+
+    # save bitmaps to individual numpy label
+    # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
+    label = [int(f[0]) for f in counter]
+    bitmap = np.zeros((len(seed_list), len(label)))
+    for idx, i in enumerate(seed_list):
+        tmp = raw_bitmap[i]
+        for j in tmp:
+            if int(j) in label:
+                bitmap[idx][label.index((int(j)))] = 1
+
+    # label dimension reduction
+    # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
+    fit_bitmap = np.unique(bitmap, axis=1)
+    print("Data dimension" + str(fit_bitmap.shape))
+
+    trn_idx=0
+
+    # save training data
+    MAX_BITMAP_SIZE = fit_bitmap.shape[1]
+    for trn_idx, i in enumerate(train_seed_list):
+        file_name = "./train_bitmaps/" + i.split('/')[-1]
+        np.save(file_name, fit_bitmap[trn_idx])
+
+    for tst_idx, i in enumerate(test_seed_list):
+        tst_idx=trn_idx+tst_idx
+        file_name = "./test_bitmaps/" + i.split('/')[-1]
+        np.save(file_name, fit_bitmap[tst_idx])
+
+# training data generator
+def generate_training_data(lb, ub):
+        
+    seed = np.zeros((ub - lb, MAX_FILE_SIZE))
+    bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
+    for i in range(lb, ub):
+        tmp = open(train_seed_list[i], 'rb').read()
+        ln = len(tmp)
+        if ln < MAX_FILE_SIZE:
+            tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
+        seed[i - lb] = [j for j in bytearray(tmp)]
+
+    for i in range(lb, ub):
+        file_name = "./train_bitmaps/" + train_seed_list[i].split('/')[-1] + ".npy"
+        bitmap[i - lb] = np.load(file_name)
+    return seed, bitmap
+
+
+# training data generator
+def generate_testing_data(lb, ub):
+       
+    seed = np.zeros((ub - lb, MAX_FILE_SIZE))
+    bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
+    for i in range(lb, ub):
+        tmp = open(test_seed_list[i], 'rb').read()
+        ln = len(tmp)
+        if ln < MAX_FILE_SIZE:
+            tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
+        seed[i - lb] = [j for j in bytearray(tmp)]
+
+    for i in range(lb, ub):
+        file_name = "./test_bitmaps/" + test_seed_list[i].split('/')[-1] + ".npy"
+        bitmap[i - lb] = np.load(file_name)
+    return seed, bitmap
+
+
+
+# learning rate decay
+def step_decay(epoch):
+    initial_lrate = 0.001
+    drop = 0.7
+    epochs_drop = 10.0
+    lrate = initial_lrate * math.pow(drop, math.floor((1 + epoch) / epochs_drop))
+    return lrate
+class LossHistory(keras.callbacks.Callback):
+
+    def on_train_begin(self, logs={}):
+        self.losses = []
+        self.lr = []
+
+    def on_epoch_end(self, batch, logs={}):
+        self.losses.append(logs.get('loss'))
+        self.lr.append(step_decay(len(self.losses)))
+        print(step_decay(len(self.losses)))
+
+
+# compute jaccard accuracy for multiple label
+def accur_1(y_true, y_pred):
+    y_true = tf.round(y_true)
+    pred = tf.round(y_pred)
+    summ = tf.constant(MAX_BITMAP_SIZE, dtype=tf.float32)
+    wrong_num = tf.subtract(summ, tf.reduce_sum(tf.cast(tf.equal(y_true, pred), tf.float32), axis=-1))
+    right_1_num = tf.reduce_sum(tf.cast(tf.logical_and(tf.cast(y_true, tf.bool), tf.cast(pred, tf.bool)), tf.float32), axis=-1)
+    return K.mean(tf.divide(right_1_num, tf.add(right_1_num, wrong_num)))
+
+def train_generate(batch_size):
+    global train_seed_list
+    while 1:
+        for i in range(0, train_len, batch_size):
+            # load full batch if batchsize is greater than the seeds availible
+            if (i + batch_size) > train_len:
+                x, y = generate_training_data(i, train_len)
+                x = x.astype('float32') / 255
+            # load remaining data for last batch
+            else:
+                x, y = generate_training_data(i, i + batch_size)
+                x = x.astype('float32') / 255
+            yield (x,y)
+
+
+def test_generate(batch_size):
+    
+    while 1:
+        for i in range(0, test_len, batch_size):
+            # load full batch if batchsize is greater than the seeds availible
+            if (i + batch_size) > test_len:
+                x, y = generate_testing_data(i, test_len)
+                x = x.astype('float32') / 255
+            # load remaining data for last batch
+            else:
+                x, y = generate_testing_data(i, i + batch_size)
+                x = x.astype('float32') / 255
+            yield (x,y)
+
+
+# get vector representation of input
+def vectorize_file(fl):
+    seed = np.zeros((1, MAX_FILE_SIZE))
+    tmp = open(fl, 'rb').read()
+    ln = len(tmp)
+    if ln < MAX_FILE_SIZE:
+        tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
+    seed[0] = [j for j in bytearray(tmp)]
+    seed = seed.astype('float32') / 255
+    return seed
+
+
+# Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
+# splice two seeds to a new seed
+def splice_seed(fl1, fl2, idxx):
+    tmp1 = open(fl1, 'rb').read()
+    ret = 1
+    randd = fl2
+    while ret == 1:
+        tmp2 = open(randd, 'rb').read()
+        if len(tmp1) >= len(tmp2):
+            lenn = len(tmp2)
+            head = tmp2
+            tail = tmp1
+        else:
+            lenn = len(tmp1)
+            head = tmp1
+            tail = tmp2
+        f_diff = 0
+        l_diff = 0
+
+        #lenn is the longest seed 
+        for i in range(lenn):
+            if tmp1[i] != tmp2[i]:
+                f_diff = i
+                break
+        for i in reversed(range(lenn)):
+            if tmp1[i] != tmp2[i]:
+                l_diff = i
+                break
+
+        #Is this because the shorter inputs are null byte padded on the right ?
+        if f_diff >= 0 and l_diff > 0 and (l_diff - f_diff) >= 2:
+            splice_at = f_diff + random.randint(1, l_diff - f_diff - 1)
+            head = list(head)
+            tail = list(tail)
+            tail[:splice_at] = head[:splice_at]
+            with open('./splice_seeds/tmp_' + str(idxx), 'wb') as f:
+                f.write(bytearray(tail))
+            ret = 0
+        print(f_diff, l_diff)
+        randd = random.choice(seed_list)
+
+def build_model():
+    #Fixed batch size and epoch?
+    batch_size = 32
+    num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
+    epochs = 50                   #retrained on new bitmap sizes.
+
+    #Two FC layers with 
+    #MAX_FILE_SIZE -> FC -> 4096 -> RELU -> FC -> MAX_BITMAP_SIZE -> SIGMOID
+    model = Sequential()
+    model.add(Dense(4096, input_dim=MAX_FILE_SIZE))
+    model.add(Activation('relu'))
+    model.add(Dense(num_classes))
+    model.add(Activation('sigmoid'))
+
+    #Adams
+    opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
+
+    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=[accur_1])
+    model.summary()
+
+    return model
+
+
+def train(model):
+    st=time.time()
+    loss_history = LossHistory()
+    lrate = keras.callbacks.LearningRateScheduler(step_decay)
+    callbacks_list = [loss_history, lrate]
+    hist=model.fit_generator(train_generate(16), #BS of 16, fixed?
+                        steps_per_epoch=(train_len / 16 + 1),
+                        epochs=50,
+                        verbose=1, callbacks=callbacks_list,
+                        validation_data=train_generate(batch_size=16),
+                        validation_steps=(test_len / 16 + 1))
+    # Save model and weights
+    model.save_weights("hard_label.h5")
+    #plot_acc(hist)
+    ft=time.time()-st
+    print("Finished training in: {:.2f}".format(ft))
+    acc=hist.history['accur_1'][-1]
+    val_acc=hist.history['val_accur_1'][-1]
+    return acc,val_acc,ft
+
+def gen_grad(target):
+    global round_cnt
+    t0 = time.time()
+    process_data(target)
+    print("Bitmap generating time: {:.2f}".format(time.time()-t0))
+    model = build_model()
+    acc,val_acc,train_time=train(model)
+    print("Total pre-process time: {:.2f}".format(time.time() - t0))
+    return acc,val_acc,train_time
+
+if __name__ == '__main__':
+    prog_dir={'harfbuzz':'hb-fuzzer',
+              'libjpeg':'djpeg',
+              'libxml':'xmllint',
+              'mupdf':'mutool',
+              'nm':'nm-new',
+              'objdump':'obj-dump',
+              'readelf':'readelf',
+              'size':'size',
+              'strip':'strip-new',
+              'zlib':'miniunz'}
+
+    results_dir={'harfbuzz':{},
+              'libjpeg':{},
+              'libxml':{},
+              'mupdf':{},
+              'nm':{},
+              'objdump':{},
+              'readelf':{},
+              'size':{},
+              'strip':{},
+              'zlib':{}}
+
+    enable_asan=False 
+    prog_dirs=os.listdir('.')
+    for prog,bin in zip(prog_dir.keys(),prog_dir.values()):
+        os.chdir(prog)
+        target=bin
+        acc,val_acc,train_time=gen_grad(target)
+        results_dir[prog]['accuracy']=acc
+        results_dir[prog]['validation accuracy']=val_acc
+        results_dir[prog]['train time']=train_time
+        os.chdir('..')
+        
+    with open('vanilla_results.json','w') as fp:
+        json.dumps(results_dir,fp, indent=4) 

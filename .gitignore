@@ -2,3 +2,12 @@ neuzz_dbg
 NN_test/libjpeg
 NN_test/harfbuzz
 NN_test/deadbeef
+NN_test/libjpeg
+NN_test/libxml
+NN_test/mupdf
+NN_test/nm
+NN_test/objdump
+NN_test/readelf
+NN_test/size
+NN_test/strip
+NN_test/zlib
