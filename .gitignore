@@ -11,3 +11,5 @@ NN_test/readelf
 NN_test/size
 NN_test/strip
 NN_test/zlib
+NN_test/ELM_results.json
+NN_test/__pycache__/TorchELM.cpython-39.pyc
