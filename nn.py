@@ -77,16 +77,16 @@ def process_data():
         try:
             infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '512' if not args.enable_asan else 'none'
+            mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
-            print('Weird afl-showmap bug again') #JW DBG
-            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+            print('Warning: showmap returns none 0 exit status') 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
         #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
