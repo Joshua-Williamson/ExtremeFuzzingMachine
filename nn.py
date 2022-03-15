@@ -85,7 +85,7 @@ def process_data():
                 out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
-            print('Warning: showmap returns none 0 exit status') 
+            print('Warning: showmap returns none 0 exit status for seed:{}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
@@ -374,7 +374,8 @@ def gen_grad(data):
     process_data()
     model,optimiser = build_model()
     train(model,optimiser)
-    gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
+    #100-> 200 mutation cases?
+    gen_mutate2(model, 50, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
