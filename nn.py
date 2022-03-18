@@ -85,7 +85,7 @@ def process_data():
                 out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
-            print('Warning: showmap returns none 0 exit status for seed:{}'.format(f)) 
+            print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
@@ -212,7 +212,7 @@ def splice_seed(fl1, fl2, idxx):
             with open('./splice_seeds/tmp_' + str(idxx), 'wb') as f:
                 f.write(bytearray(tail))
             ret = 0
-        print(f_diff, l_diff)
+        print("Splice_info:",f_diff, l_diff)
         randd = random.choice(seed_list)
 
 
@@ -238,7 +238,7 @@ def gen_adv2(f, fl, model, idxx, splice):
             splice_seed(fl[0], fl[1], idxx)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
             out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x).numpy()
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
@@ -246,7 +246,7 @@ def gen_adv2(f, fl, model, idxx, splice):
             splice_seed(fl[0], fl[1], idxx + 500)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
             out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x).numpy()
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
@@ -264,7 +264,7 @@ def gen_adv3(f, fl, model, idxx, splice):
     for index in range(ll):
         x = vectorize_file(fl[index])
         out = model.forward_to_sig(x)[:,f]
-        grads_value = torch.autograd.grad(out,x).numpy()
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         #val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -275,7 +275,7 @@ def gen_adv3(f, fl, model, idxx, splice):
         splice_seed(fl[0], fl[1], idxx)
         x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
         out = model.forward_to_sig(x)[:,f]
-        grads_value = torch.autograd.grad(out,x).numpy()
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         # val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -375,7 +375,7 @@ def gen_grad(data):
     model,optimiser = build_model()
     train(model,optimiser)
     #100-> 200 mutation cases?
-    gen_mutate2(model, 50, data[:5] == b"train") #500 -> 100 in paper
+    gen_mutate2(model, 5, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
