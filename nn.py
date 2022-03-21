@@ -273,12 +273,12 @@ def gen_adv2(f, fl, model, layer_list, idxx, splice):
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
         else:
-            splice_seed(fl[0], fl[1], idxx + 500)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
+            splice_seed(fl[0], fl[1], idxx + 100)
+            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 100))
             loss_value, grads_value = iterate([x])
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
+            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 100)))
 
     return adv_list
 
@@ -396,7 +396,7 @@ def train(model):
     callbacks_list = [loss_history, lrate]
     model.fit_generator(train_generate(16), #BS of 16, fixed?
                         steps_per_epoch=(SPLIT_RATIO / 16 + 1),
-                        epochs=100,
+                        epochs=50,
                         verbose=1, callbacks=callbacks_list)
     # Save model and weights
     model.save_weights("hard_label.h5")
@@ -409,7 +409,7 @@ def gen_grad(data):
     model = build_model()
     train(model)
     # model.load_weights('hard_label.h5')
-    gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
+    gen_mutate2(model, 100, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
