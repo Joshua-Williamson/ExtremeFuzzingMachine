@@ -77,16 +77,16 @@ def process_data():
         try:
             infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '512' if not args.enable_asan else 'none'
+            mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
-            print('Weird afl-showmap bug again') #JW DBG
-            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+            print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
         #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
@@ -212,7 +212,7 @@ def splice_seed(fl1, fl2, idxx):
             with open('./splice_seeds/tmp_' + str(idxx), 'wb') as f:
                 f.write(bytearray(tail))
             ret = 0
-        print(f_diff, l_diff)
+        print("Splice_info:",f_diff, l_diff)
         randd = random.choice(seed_list)
 
 
@@ -238,7 +238,7 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
             splice_seed(fl[0], fl[1], idxx)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
             out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x).numpy()
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
@@ -246,7 +246,7 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
             splice_seed(fl[0], fl[1], idxx + edge_num)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
             out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x).numpy()
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
@@ -264,7 +264,7 @@ def gen_adv3(f, fl, model, idxx, splice, edge_num):
     for index in range(ll):
         x = vectorize_file(fl[index])
         out = model.forward_to_sig(x)[:,f]
-        grads_value = torch.autograd.grad(out,x).numpy()
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         #val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -275,7 +275,7 @@ def gen_adv3(f, fl, model, idxx, splice, edge_num):
         splice_seed(fl[0], fl[1], idxx)
         x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
         out = model.forward_to_sig(x)[:,f]
-        grads_value = torch.autograd.grad(out,x).numpy()
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         # val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
@@ -374,7 +374,8 @@ def gen_grad(data):
     process_data()
     model,optimiser = build_model()
     train(model,optimiser)
-    gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
+    #100-> 200 mutation cases?
+    gen_mutate2(model, 5, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
