@@ -218,7 +218,7 @@ def splice_seed(fl1, fl2, idxx):
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, model, idxx, splice):
+def gen_adv2(f, fl, model, idxx, splice,edge_num):
     adv_list = []
     ll = 2
     while fl[0] == fl[1]:
@@ -243,19 +243,19 @@ def gen_adv2(f, fl, model, idxx, splice):
             val = np.sign(grads_value[0][idx])
             adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
         else:
-            splice_seed(fl[0], fl[1], idxx + 500)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
+            splice_seed(fl[0], fl[1], idxx + edge_num)
+            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
             out = model.forward_to_sig(x)[:,f]
             grads_value = torch.autograd.grad(out,x).numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
+            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
 
     return adv_list
 
 
 # compute gradient for given input without sign
-def gen_adv3(f, fl, model, idxx, splice):
+def gen_adv3(f, fl, model, idxx, splice, edge_num):
     adv_list = []
     ll = 2
     while fl[0] == fl[1]:
@@ -317,7 +317,7 @@ def gen_mutate2(model, edge_num, sign):
             print("number of feature " + str(idxx))
             index = int(interested_indice[idxx])
             fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, model, idxx, 1)
+            adv_list = fn(index, fl, model, idxx, 1, edge_num)
             tmp_list.append(adv_list)
             #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
             #bitmap and returns the gradients of each input byte w.r.t output 
