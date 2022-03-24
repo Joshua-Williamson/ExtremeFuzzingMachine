@@ -334,11 +334,11 @@ def build_model():
     num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
     epochs = 50                   #retrained on new bitmap sizes.
 
-    model = ELM(input_size=MAX_FILE_SIZE,output_size=num_classes,hidden_size=4096,activation='relu')
+    model = ELM(input_size=MAX_FILE_SIZE,output_activation=True,output_size=num_classes,hidden_size=4096,activation='relu')
     if args.enable_cuda:
         model.cuda()
 
-    optimizer= pseudoInverse(params=model.parameters(),C=0.001,L=0)
+    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0)
 
     return model,optimizer
 

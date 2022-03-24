@@ -10,7 +10,7 @@ from torch.autograd import Variable
 import time
 
 class ELM(nn.Module):
-    def __init__(self,input_size,output_size,hidden_size=4096,activation='leaky_relu'):
+    def __init__(self,input_size,output_size,hidden_size=4096,activation='leaky_relu',output_activation=True):
         super(ELM, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.activation = getattr(F,activation)
@@ -19,8 +19,8 @@ class ELM(nn.Module):
         else:
             torch.nn.init.xavier_uniform_(self.fc1.weight, gain=1)
         self.fc2 = nn.Linear(hidden_size, output_size, bias=False) # ELM do not use bias in the output layer.
-        self.sig =  nn.Sigmoid()
-
+        if output_activation:
+            self.sig =  nn.Sigmoid()
 
     def forward(self, x):
         x = x.view(x.size(0),-1)
@@ -45,7 +45,7 @@ class ELM(nn.Module):
 
 
 class pseudoInverse(object):
-    def __init__(self,params,C=1e-2,forgettingfactor=1,L =100):
+    def __init__(self,output_activation,params,C=1e-2,forgettingfactor=1,L =100):
         self.params=list(params)
         self.is_cuda=self.params[len(self.params)-1].is_cuda
         self.C=C
@@ -59,6 +59,10 @@ class pseudoInverse(object):
 
         if self.is_cuda:
             self.M=self.M.cuda()
+        
+        self.output_activation = output_activation
+        self.a=100000.
+
 
     def initialize(self):
         self.M = Variable(torch.inverse(self.C * torch.eye(self.dimInput)),requires_grad=True, volatile=False)
@@ -103,8 +107,15 @@ class pseudoInverse(object):
         numSamples=inputs.size()[0]
         dimInput=inputs.size()[1]
         dimTarget=targets.size()[1]
+        if self.output_activation:
+            inputs=self.boolean_inverse_sigmoid(inputs)
 
         if numSamples>dimInput:
             self.pseudoBig(inputs,targets)
         else:
             self.pseudoSmall(inputs,targets)
+
+    def boolean_inverse_sigmoid(self,x):
+        #This could be just stupid but if you think that the inverse sigmoid function just essentially takes 0 -> -inf and 1 -> +inf
+        #So inverting this just means transforming [0,1] -> [-a,a] where a is just a nig number.
+        return (x-0.5)*2*self.a

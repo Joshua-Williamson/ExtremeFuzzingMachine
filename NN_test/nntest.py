@@ -81,16 +81,16 @@ def process_data():
         try:
             infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '512' if not args.enable_asan else 'none'
+            mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
             infile.close()
         except subprocess.CalledProcessError as e:
-            print('Weird afl-showmap bug again') #JW DBG
-            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+            print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
         #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
@@ -192,6 +192,88 @@ def vectorize_file(fl):
     seed.requires_grad=True
     return seed
 
+# compute gradient for given input
+# taking gradient of randomly selected bitmap output at randomly selected input
+def gen_adv2(f, fl, model, idxx, splice,edge_num):
+    adv_list = []
+    ll = 2
+    while fl[0] == fl[1]:
+        fl[1] = random.choice(seed_list)
+
+    for index in range(ll):
+        x = vectorize_file(fl[index])
+        out = model.forward_to_sig(x)[:,f]
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
+        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+        val = np.sign(grads_value[0][idx])
+        adv_list.append((idx, val, fl[index]))
+
+    # do not generate spliced seed for the first round
+    if splice == 1 and round_cnt != 0:
+        if round_cnt % 2 == 0:
+            splice_seed(fl[0], fl[1], idxx)
+            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
+            out = model.forward_to_sig(x)[:,f]
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
+            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+            val = np.sign(grads_value[0][idx])
+            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
+        else:
+            splice_seed(fl[0], fl[1], idxx + edge_num)
+            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
+            out = model.forward_to_sig(x)[:,f]
+            grads_value = torch.autograd.grad(out,x)[0].numpy()
+            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+            val = np.sign(grads_value[0][idx])
+            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
+
+    return adv_list
+
+
+# grenerate gradient information to guide furture muatation
+def gen_mutate2(model, edge_num, sign):
+    
+    #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
+    
+    tmp_list = []
+    # select seeds
+    print("#######debug" + str(round_cnt))
+    if round_cnt == 0:
+        new_seed_list = seed_list
+    else:
+        new_seed_list = new_seeds
+
+    if len(new_seed_list) < edge_num: #2 X 500 random samples of seed list
+        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=True)]
+    else:
+        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=False)]
+    if len(new_seed_list) < edge_num:
+        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=True)]
+    else:
+        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=False)]
+
+    # function pointer for gradient computation
+    fn = gen_adv2
+
+    # select output neurons to compute gradient
+    interested_indice = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+
+    with open('gradient_testing_info_ELM','w') as f:
+        f.write(str(MAX_FILE_SIZE)+"|"+str(MAX_BITMAP_SIZE) + "\n")
+        for idxx in range(len(interested_indice[:])):
+            print("number of feature " + str(idxx))
+            index = int(interested_indice[idxx])
+            fl = [rand_seed1[idxx], rand_seed2[idxx]]
+            adv_list = fn(index, fl, model, idxx, 1, edge_num)
+            tmp_list.append(adv_list)
+            #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
+            #bitmap and returns the gradients of each input byte w.r.t output 
+            for ele in adv_list:
+                ele0 = [str(el) for el in ele[0]]
+                ele1 = [str(int(el)) for el in ele[1]]
+                ele2 = ele[2]
+                f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + '|' + str(index)+ "\n")
+
 
 # Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
 # splice two seeds to a new seed
@@ -240,11 +322,11 @@ def build_model():
     num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
     epochs = 50                   #retrained on new bitmap sizes.
 
-    model = ELM(input_size=MAX_FILE_SIZE,output_size=num_classes,hidden_size=4096,activation='relu')
+    model = ELM(input_size=MAX_FILE_SIZE,output_size=num_classes,hidden_size=4096,activation='relu',output_activation=True)
     if args.enable_cuda:
         model.cuda()
 
-    optimizer= pseudoInverse(params=model.parameters(),C=0.001,L=0)
+    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0)
 
     return model,optimizer
 
@@ -301,7 +383,8 @@ def gen_grad(data):
     train(model,optimiser)
     test(model)
     print("Total pre-process time: {:.2f}".format(time.time() - t0))
-
+    if args.enable_gradient_comparison:
+        gen_mutate2(model, 1000, data[:5] == b"train") #500 -> 100 in paper
 
 if __name__ == '__main__':
 
@@ -319,6 +402,13 @@ if __name__ == '__main__':
                         help='Enables cuda functionality on training',
                         default=False,
                         action='store_true')
+
+    parser.add_argument('-g',
+                        '--enable-gradient-comparison',
+                        help='will compare grads',
+                        default=False,
+                        action='store_true'
+                        )
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args
