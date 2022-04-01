@@ -1,5 +1,6 @@
 #Forked form @chickenbestlover & modified
 
+from tkinter import W
 import torch
 import torch.utils.data.dataloader
 import torch.nn as nn
@@ -19,6 +20,7 @@ class ELM(nn.Module):
         else:
             torch.nn.init.xavier_uniform_(self.fc1.weight, gain=1)
         self.fc2 = nn.Linear(hidden_size, output_size, bias=False) # ELM do not use bias in the output layer.
+        self.output_activation=output_activation
         if output_activation:
             self.sig =  nn.Sigmoid()
 
@@ -27,7 +29,8 @@ class ELM(nn.Module):
         x = self.fc1(x)
         x = self.activation(x)
         x = self.fc2(x)
-        x = self.sig(x)
+        if self.output_activation:
+            x = self.sig(x)
         return x
 
     def forward_to_sig(self, x):
@@ -45,7 +48,7 @@ class ELM(nn.Module):
 
 
 class pseudoInverse(object):
-    def __init__(self,output_activation,params,C=1e-2,forgettingfactor=1,L =100):
+    def __init__(self,output_activation,params,C=1e-2,forgettingfactor=1,L =100,a=100000.):
         self.params=list(params)
         self.is_cuda=self.params[len(self.params)-1].is_cuda
         self.C=C
@@ -61,8 +64,7 @@ class pseudoInverse(object):
             self.M=self.M.cuda()
         
         self.output_activation = output_activation
-        self.a=100000.
-
+        self.a=a
 
     def initialize(self):
         self.M = Variable(torch.inverse(self.C * torch.eye(self.dimInput)),requires_grad=True, volatile=False)

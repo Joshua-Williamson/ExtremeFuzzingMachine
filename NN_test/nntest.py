@@ -52,6 +52,8 @@ def process_data():
     seed_list = glob.glob('./seeds/*')
     seed_list.sort()
     TTR=2./3.
+    if args.disable_testing_split:
+        TTR=1.
     SPLIT_RATIO = int(len(seed_list)*TTR)
     np.random.shuffle(seed_list)
     train_seed_list=seed_list[:SPLIT_RATIO]
@@ -206,26 +208,7 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
         grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         val = np.sign(grads_value[0][idx])
-        adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        if round_cnt % 2 == 0:
-            splice_seed(fl[0], fl[1], idxx)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-        else:
-            splice_seed(fl[0], fl[1], idxx + edge_num)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
-            out = model.forward_to_sig(x)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
+        adv_list.append((idx, val, fl[index],out.detach().numpy()))
 
     return adv_list
 
@@ -272,8 +255,8 @@ def gen_mutate2(model, edge_num, sign):
                 ele0 = [str(el) for el in ele[0]]
                 ele1 = [str(int(el)) for el in ele[1]]
                 ele2 = ele[2]
-                f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + '|' + str(index)+ "\n")
-
+                ele3 = str(ele[3])
+                f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + '|' + ele3 + '|' + str(index)+ "\n")
 
 # Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
 # splice two seeds to a new seed
@@ -326,7 +309,7 @@ def build_model():
     if args.enable_cuda:
         model.cuda()
 
-    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0)
+    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0,a=.0001)
 
     return model,optimizer
 
@@ -339,7 +322,7 @@ def accur_1(y_true, y_pred):
     return torch.mean(right_num/(right_num+wrong_num))
 
 def train(model,optimizer):
-    batch_size=16
+    batch_size=train_len
     init = time.time()
     model.train()
     for batch_idx, (data, target) in enumerate(train_generate(tt='train',batch_size=batch_size)):
@@ -381,7 +364,8 @@ def gen_grad(data):
     print("Bitmap generating time: {:.2f}".format(time.time()-t0))
     model,optimiser = build_model()
     train(model,optimiser)
-    test(model)
+    if not args.disable_testing_split:
+        test(model)
     print("Total pre-process time: {:.2f}".format(time.time() - t0))
     if args.enable_gradient_comparison:
         gen_mutate2(model, 1000, data[:5] == b"train") #500 -> 100 in paper
@@ -410,6 +394,13 @@ if __name__ == '__main__':
                         action='store_true'
                         )
 
+    parser.add_argument('-notesting',
+                        '--disable-testing-split',
+                        help='disables train test split such that there is not validation',
+                        default=False,
+                        action='store_true'
+                        )
+    
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args
     args = parser.parse_args()

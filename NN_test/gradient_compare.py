@@ -50,7 +50,7 @@ def gen_adv2(f, fl, model, layer_list, idxx, splice):
     loss_value, grads_value = iterate([x])
     idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
     val = np.sign(grads_value[0][idx])
-    adv_list.append((idx, val, fl))
+    adv_list.append((idx, val, fl,loss_value))
     return adv_list
 
 # get vector representation of input
@@ -77,6 +77,7 @@ with open('gradient_testing_info_neuzz','w') as g:
                 model.load_weights('hard_label.h5')
                 layer_list = [(layer.name, layer) for layer in model.layers]
                 i+=1
+                g.write(str(MAX_FILE_SIZE)+"|"+str(MAX_BITMAP_SIZE) + "\n")
             else:
                 if i % 100 == 0:
                     del model
@@ -85,14 +86,16 @@ with open('gradient_testing_info_neuzz','w') as g:
                     model.load_weights('hard_label.h5')
                     layer_list = [(layer.name, layer) for layer in model.layers]
         
-                pos,val,file,output=line.split("|")
+                pos,val,file,_,output=line.split("|")
                 output=int(output)
 
                 adv_list = gen_adv2(output, file, model, layer_list, i, 1)
 
                 for ele in adv_list:
-                    ele0 = [str(el) for el in ele[0]]
-                    ele1 = [str(int(el)) for el in ele[1]]
-                    ele2 = ele[2]
-                    g.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + '|' + str(output)+ "\n")
+                    ele0 = [str(el) for el in ele[0]]#pos
+                    ele1 = [str(int(el)) for el in ele[1]]#val
+                    ele2 = ele[2]#file
+                    ele3 = str(ele[3])#output for debug
+                    g.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + '|' +ele3 + '|' + str(output)+ "\n")
+
                 i+=1

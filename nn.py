@@ -338,7 +338,7 @@ def build_model():
     if args.enable_cuda:
         model.cuda()
 
-    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0)
+    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0,a=0.0001)
 
     return model,optimizer
 
@@ -351,7 +351,7 @@ def accur_1(y_true, y_pred):
     return torch.mean(torch.divide(right_1_num, torch.add(right_1_num, wrong_num)))
 
 def train(model,optimizer):
-    batch_size=16
+    batch_size=len(seed_list)
     init = time.time()
     model.train()
     for batch_idx, (data, target) in enumerate(train_generate(batch_size)):

@@ -13,3 +13,13 @@ NN_test/strip
 NN_test/zlib
 NN_test/ELM_results.json
 NN_test/__pycache__/TorchELM.cpython-39.pyc
+NN_test/crashes
+NN_test/seeds
+NN_test/splice_seeds
+NN_test/test_bitmaps
+NN_test/train_bitmaps
+NN_test/vari_seeds
+NN_test/djpeg
+NN_test/gradient_testing_info_ELM
+NN_test/gradient_testing_info_neuzz
+NN_test/hard_label.h5

@@ -292,7 +292,7 @@ def build_model():
     model = Sequential()
     model.add(Dense(4096, input_dim=MAX_FILE_SIZE))
     model.add(Activation('relu'))
-    model.add(Dense(num_classes))
+    model.add(Dense(num_classes, use_bias=False))
     model.add(Activation('sigmoid'))
 
     #Adams
