@@ -1,6 +1,5 @@
 #Forked form @chickenbestlover & modified
 
-from tkinter import W
 import torch
 import torch.utils.data.dataloader
 import torch.nn as nn
@@ -10,72 +9,20 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import time
 
-class ELM(nn.Module):
-    def __init__(self,input_size,output_size,hidden_size=4096,activation='leaky_relu',output_activation=True):
-        super(ELM, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.activation = getattr(F,activation)
-        if activation in ['relu', 'leaky_relu']:
-            torch.nn.init.xavier_uniform_(self.fc1.weight,gain=nn.init.calculate_gain(activation))
-        else:
-            torch.nn.init.xavier_uniform_(self.fc1.weight, gain=1)
-        self.fc2 = nn.Linear(hidden_size, output_size, bias=False) # ELM do not use bias in the output layer.
-        self.output_activation=output_activation
-        if output_activation:
-            self.sig =  nn.Sigmoid()
-
-    def forward(self, x):
-        x = x.view(x.size(0),-1)
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.fc2(x)
-        if self.output_activation:
-            x = self.sig(x)
-        return x
-
-    def forward_to_sig(self, x):
-        x = x.view(x.size(0),-1)
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.fc2(x)
-        return x
-
-    def forwardToHidden(self, x):
-        x = x.view(x.size(0),-1)
-        x = self.fc1(x)
-        x = self.activation(x)
-        return x
-
-
 class pseudoInverse(object):
-    def __init__(self,output_activation,params,C=1e-2,forgettingfactor=1,L =100,a=100000.):
-        self.params=list(params)
-        self.is_cuda=self.params[len(self.params)-1].is_cuda
+    def __init__(self,input_dim,C=1e-2,forgettingfactor=1,L =100,is_cuda=False):
+        self.is_cuda=is_cuda
         self.C=C
         self.L=L
-        self.w=self.params[len(self.params)-1]
-        self.w.data.fill_(0) #initialize output weight as zeros
-        # For sequential learning in OS-ELM
-        self.dimInput=self.params[len(self.params)-1].data.size()[1]
         self.forgettingfactor=forgettingfactor
+        self.dimInput=input_dim
         self.M=Variable(torch.inverse(self.C*torch.eye(self.dimInput)),requires_grad=True, volatile=False)
 
         if self.is_cuda:
             self.M=self.M.cuda()
         
-        self.output_activation = output_activation
-        self.a=a
-
-    def initialize(self):
-        self.M = Variable(torch.inverse(self.C * torch.eye(self.dimInput)),requires_grad=True, volatile=False)
-
-        if self.is_cuda:
-            self.M = self.M.cuda()
-        self.w = self.params[len(self.params) - 1]
-        self.w.data.fill_(0.0)
-
     def pseudoBig(self,inputs,oneHotTarget):
-        xtx = torch.mm(inputs.t(), inputs) # [ n_features * n_features ]
+        xtx =inputs 
         dimInput=inputs.size()[1]
         I = Variable(torch.eye(dimInput),requires_grad=True, volatile=False)
         if self.is_cuda:
@@ -88,36 +35,38 @@ class pseudoInverse(object):
         else:
             self.M = Variable(torch.inverse(xtx.data + self.C *I.data), requires_grad=True, volatile=False)
 
-        w = torch.mm(self.M, inputs.t())
-        w = torch.mm(w, oneHotTarget)
-        self.w.data = w.t().data
+        w = torch.mm(self.M, oneHotTarget)
+        return w
 
     def pseudoSmall(self,inputs,oneHotTarget):
-        xxt = torch.mm(inputs, inputs.t())
+        xxt = inputs 
         numSamples=inputs.size()[0]
         I = Variable(torch.eye(numSamples),requires_grad=True, volatile=False)
         if self.is_cuda:
             I = I.cuda()
         self.M = Variable(torch.inverse(xxt.data + self.C * I.data),requires_grad=True, volatile=False)
-        w = torch.mm(inputs.t(), self.M)
-        w = torch.mm(w, oneHotTarget)
-
-        self.w.data = w.t().data
+        w = torch.mm(self.M, oneHotTarget)
+        return w
 
     def train(self,inputs,targets):
         targets = targets.view(targets.size(0),-1)
         numSamples=inputs.size()[0]
         dimInput=inputs.size()[1]
-        dimTarget=targets.size()[1]
-        if self.output_activation:
-            inputs=self.boolean_inverse_sigmoid(inputs)
+        self.K=self.RBF_Kernel(inputs,inputs,0.0002)
 
         if numSamples>dimInput:
-            self.pseudoBig(inputs,targets)
+            self.Net = self.pseudoBig(self.K,targets)
         else:
-            self.pseudoSmall(inputs,targets)
+            self.Net = self.pseudoSmall(self.K,targets)
 
-    def boolean_inverse_sigmoid(self,x):
-        #This could be just stupid but if you think that the inverse sigmoid function just essentially takes 0 -> -inf and 1 -> +inf
-        #So inverting this just means transforming [0,1] -> [-a,a] where a is just a nig number.
-        return (x-0.5)*2*self.a
+    def RBF_Kernel(self,x,y,sigma):
+        K = torch.zeros(len(x),len(y))
+        for i,ii in enumerate(x):
+            for j, jj in enumerate(y):
+                sum=ii-jj
+                sum=torch.dot(sum,sum)
+                K[i,j]=torch.exp(-sum/(2*sigma**2))
+
+        return K 
+
+    

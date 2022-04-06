@@ -15,7 +15,7 @@ from collections import Counter
 
 import torch
 from torch.autograd import Variable
-from TorchELM import ELM,pseudoInverse 
+from TorchELM import pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
@@ -173,10 +173,12 @@ def train_generate(tt,batch_size):
         # load full batch if batchsize is greater than the seeds availible
         if (i + batch_size) > SPLIT_RATIO:
             x, y = generate_training_data(tt,i, SPLIT_RATIO)
+            y=y*2-1
             x = x.astype('float32') / 255
         # load remaining data for last batch
         else:
             x, y = generate_training_data(tt,i, i + batch_size)
+            y=y*2-1
             x = x.astype('float32') / 255
         yield (torch.Tensor(x), torch.Tensor(y))
 
@@ -301,57 +303,49 @@ def splice_seed(fl1, fl2, idxx):
 
 def build_model():
     #Fixed batch size and epoch?
-    batch_size = 32
-    num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
-    epochs = 50                   #retrained on new bitmap sizes.
+    optimizer= pseudoInverse(train_len,C=0.001,L=0)
 
-    model = ELM(input_size=MAX_FILE_SIZE,output_size=num_classes,hidden_size=4096,activation='relu',output_activation=True)
-    if args.enable_cuda:
-        model.cuda()
-
-    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0,a=.0001)
-
-    return model,optimizer
+    return optimizer
 
 def accur_1(y_true, y_pred):
-    y_true = torch.round(y_true)
-    pred =torch.round(y_pred) 
+    y_true = torch.sign(y_true - 1e-6)#Make better
+    pred =torch.sign(y_pred - 1e-6) 
     summ = MAX_BITMAP_SIZE
     right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
     wrong_num = summ-right_num
     return torch.mean(right_num/(right_num+wrong_num))
 
-def train(model,optimizer):
+def train(optimizer):
     batch_size=train_len
     init = time.time()
-    model.train()
     for batch_idx, (data, target) in enumerate(train_generate(tt='train',batch_size=batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
-        data, target = Variable(data,requires_grad=True, volatile=False), \
-                       Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        hiddenOut = model.forwardToHidden(data)
-        optimizer.train(inputs=hiddenOut, targets=target)
-        output = model.forward(data)
+        data, target = Variable(data,requires_grad=False), \
+                       Variable(target.type(torch.float32),requires_grad=False)
+        optimizer.data=data
+        optimizer.train(inputs=data, targets=target)
+        output = torch.mm(optimizer.K.T,optimizer.Net)
         pred=output
         acc=accur_1(target,pred)
 
     ending = time.time()
     print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
 
-def test(model):
-    batch_size=len(test_seed_list)
+def test(optimizer):
+    batch_size=1
     init = time.time()
-    model.train()
+    acc=0
     for batch_idx, (data, target) in enumerate(train_generate(tt='test',batch_size=batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=True, volatile=False), \
                        Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        output = model.forward(data)
-        pred=output
-        acc=accur_1(target,pred)
-
+        K=optimizer.RBF_Kernel(data,optimizer.data,0.2)
+        pred=torch.mm(K,optimizer.Net)
+        acc+=accur_1(target,pred)
+        
+    acc/=test_len
     ending = time.time()
     print('Testing time: {:.2f}sec/ Testing Accuracy: {:.2f}'.format(ending - init, acc))
 
@@ -362,10 +356,10 @@ def gen_grad(data):
     t0 = time.time()
     process_data()
     print("Bitmap generating time: {:.2f}".format(time.time()-t0))
-    model,optimiser = build_model()
-    train(model,optimiser)
+    optimiser = build_model()
+    train(optimiser)
     if not args.disable_testing_split:
-        test(model)
+        test(optimiser)
     print("Total pre-process time: {:.2f}".format(time.time() - t0))
     if args.enable_gradient_comparison:
         gen_mutate2(model, 1000, data[:5] == b"train") #500 -> 100 in paper
