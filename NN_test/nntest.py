@@ -303,7 +303,7 @@ def splice_seed(fl1, fl2, idxx):
 
 def build_model():
     #Fixed batch size and epoch?
-    optimizer= pseudoInverse(train_len,C=0.001,L=0)
+    optimizer= pseudoInverse(train_len,C=0.001,L=0,sigma=10.0)
 
     return optimizer
 
@@ -341,7 +341,7 @@ def test(optimizer):
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=True, volatile=False), \
                        Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        K=optimizer.RBF_Kernel(data,optimizer.data,0.2)
+        K=optimizer.RBF_Kernel(data,optimizer.data)
         pred=torch.mm(K,optimizer.Net)
         acc+=accur_1(target,pred)
         

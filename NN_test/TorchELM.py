@@ -10,7 +10,8 @@ from torch.autograd import Variable
 import time
 
 class pseudoInverse(object):
-    def __init__(self,input_dim,C=1e-2,forgettingfactor=1,L =100,is_cuda=False):
+    def __init__(self,input_dim,C=1e-2,forgettingfactor=1,L =100,is_cuda=False,sigma=0.0001):
+        self.sigma=sigma
         self.is_cuda=is_cuda
         self.C=C
         self.L=L
@@ -52,21 +53,35 @@ class pseudoInverse(object):
         targets = targets.view(targets.size(0),-1)
         numSamples=inputs.size()[0]
         dimInput=inputs.size()[1]
-        self.K=self.RBF_Kernel(inputs,inputs,0.0002)
+        self.K=self.RBF_Kernel(inputs,inputs)
 
         if numSamples>dimInput:
             self.Net = self.pseudoBig(self.K,targets)
         else:
             self.Net = self.pseudoSmall(self.K,targets)
 
-    def RBF_Kernel(self,x,y,sigma):
-        K = torch.zeros(len(x),len(y))
+    # def RBF_Kernel(self,x,y,sigma):
+    #     K = torch.zeros(len(x),len(y))
+    #     for i,ii in enumerate(x):
+    #         for j, jj in enumerate(y):
+    #             sum=ii-jj
+    #             sum=torch.dot(sum,sum)
+    #             K[i,j]=torch.exp(-sum/(2*sigma**2))
+
+    #     return K 
+    def RBF_Kernel(self,x,y): 
+        X_norm = torch.sum(x ** 2, dim=-1)
+        Y_norm = torch.sum(y ** 2, dim=-1)
+        gamma = 1/(2*self.sigma**2)  
+        K_1 = torch.exp(-gamma * (X_norm[:, None] + Y_norm[None, :] - 2 * torch.mm(y,x.T)))
+
+        K_2 = torch.zeros(len(x),len(y))
         for i,ii in enumerate(x):
             for j, jj in enumerate(y):
                 sum=ii-jj
                 sum=torch.dot(sum,sum)
-                K[i,j]=torch.exp(-sum/(2*sigma**2))
-
-        return K 
+                K_2[i,j]=torch.exp(-sum/(2*self.sigma**2))
+        #assert(torch.Tensor.equal(K_1,K_2))
+        return K_2
 
     
