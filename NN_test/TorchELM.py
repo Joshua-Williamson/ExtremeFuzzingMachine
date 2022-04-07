@@ -70,18 +70,18 @@ class pseudoInverse(object):
 
     #     return K 
     def RBF_Kernel(self,x,y): 
-        X_norm = torch.sum(x ** 2, dim=-1)
-        Y_norm = torch.sum(y ** 2, dim=-1)
-        gamma = 1/(2*self.sigma**2)  
-        K_1 = torch.exp(-gamma * (X_norm[:, None] + Y_norm[None, :] - 2 * torch.mm(y,x.T)))
+        # t0=time.time()
+        gamma = 1/(2*self.sigma**2)
+        sum=torch.cdist(x,y,p=2)**2 
+        K = torch.exp(-gamma * sum)
+        # t1=time.time()
+        # print('Cdist time:' + str(t1-t0))
 
-        K_2 = torch.zeros(len(x),len(y))
-        for i,ii in enumerate(x):
-            for j, jj in enumerate(y):
-                sum=ii-jj
-                sum=torch.dot(sum,sum)
-                K_2[i,j]=torch.exp(-sum/(2*self.sigma**2))
-        #assert(torch.Tensor.equal(K_1,K_2))
-        return K_2
-
-    
+        # K = torch.zeros(len(x),len(y))
+        # for i,ii in enumerate(x):
+        #     for j, jj in enumerate(y):
+        #         sum=ii-jj
+        #         sum=torch.dot(sum,sum)
+        #         K[i,j]=torch.exp(-sum/(2*self.sigma**2))
+        # print('Shit version:'+ str(time.time()-t1)) 
+        return K

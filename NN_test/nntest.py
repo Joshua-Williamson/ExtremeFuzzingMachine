@@ -81,15 +81,13 @@ def process_data():
     for f in seed_list:
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
-            infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
             mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
-            infile.close()
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
@@ -333,9 +331,9 @@ def train(optimizer):
     print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
 
 def test(optimizer):
-    batch_size=1
+    batch_size=test_len
     init = time.time()
-    acc=0
+    # acc=0
     for batch_idx, (data, target) in enumerate(train_generate(tt='test',batch_size=batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
@@ -343,9 +341,9 @@ def test(optimizer):
                        Variable(target.type(torch.float32),requires_grad=True, volatile=False)
         K=optimizer.RBF_Kernel(data,optimizer.data)
         pred=torch.mm(K,optimizer.Net)
-        acc+=accur_1(target,pred)
+        acc=accur_1(target,pred)
         
-    acc/=test_len
+    # acc/=test_len
     ending = time.time()
     print('Testing time: {:.2f}sec/ Testing Accuracy: {:.2f}'.format(ending - init, acc))
 
