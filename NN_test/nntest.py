@@ -74,6 +74,14 @@ def process_data():
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
 
+    if args.skip_showmap:
+        print('skipping showmap')
+        with open('gradient_testing_info_ELM') as f:
+            for line in f:
+                MAX_FILE_SIZE,MAX_BITMAP_SIZE = line.split("|")
+                MAX_FILE_SIZE,MAX_BITMAP_SIZE = int(MAX_FILE_SIZE), int(MAX_BITMAP_SIZE) 
+                return
+
     # obtain raw bitmaps
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
     tmp_cnt = [] #Hold's ID's cumlatively for each seed input
@@ -196,7 +204,7 @@ def vectorize_file(fl):
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, model, idxx, splice,edge_num):
+def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
     adv_list = []
     ll = 2
     while fl[0] == fl[1]:
@@ -204,7 +212,8 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        out = model.forward_to_sig(x)[:,f]
+        K=optimizer.RBF_Kernel(x,optimizer.data)
+        out=torch.mm(K,optimizer.Net)[:,f]
         grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         val = np.sign(grads_value[0][idx])
@@ -214,7 +223,7 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
 
 
 # grenerate gradient information to guide furture muatation
-def gen_mutate2(model, edge_num, sign):
+def gen_mutate2(optimizer, edge_num, sign):
     
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
     
@@ -247,7 +256,7 @@ def gen_mutate2(model, edge_num, sign):
             print("number of feature " + str(idxx))
             index = int(interested_indice[idxx])
             fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, model, idxx, 1, edge_num)
+            adv_list = fn(index, fl, optimizer, idxx, 1, edge_num)
             tmp_list.append(adv_list)
             #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
             #bitmap and returns the gradients of each input byte w.r.t output 
@@ -301,7 +310,7 @@ def splice_seed(fl1, fl2, idxx):
 
 def build_model():
     #Fixed batch size and epoch?
-    optimizer= pseudoInverse(train_len,C=0.001,L=0,sigma=10.0)
+    optimizer= pseudoInverse(train_len,C=0.001,L=0,sigma=500.0)
 
     return optimizer
 
@@ -354,13 +363,13 @@ def gen_grad(data):
     t0 = time.time()
     process_data()
     print("Bitmap generating time: {:.2f}".format(time.time()-t0))
-    optimiser = build_model()
-    train(optimiser)
+    optimizer = build_model()
+    train(optimizer)
     if not args.disable_testing_split:
-        test(optimiser)
+        test(optimizer)
     print("Total pre-process time: {:.2f}".format(time.time() - t0))
     if args.enable_gradient_comparison:
-        gen_mutate2(model, 1000, data[:5] == b"train") #500 -> 100 in paper
+        gen_mutate2(optimizer, 1000, data[:5] == b"train") #500 -> 100 in paper
 
 if __name__ == '__main__':
 
@@ -388,6 +397,13 @@ if __name__ == '__main__':
 
     parser.add_argument('-notesting',
                         '--disable-testing-split',
+                        help='disables train test split such that there is not validation',
+                        default=False,
+                        action='store_true'
+                        )
+    
+    parser.add_argument('-skipshowmap',
+                        '--skip-showmap',
                         help='disables train test split such that there is not validation',
                         default=False,
                         action='store_true'
