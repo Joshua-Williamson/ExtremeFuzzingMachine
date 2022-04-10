@@ -15,7 +15,7 @@ from collections import Counter
 
 import torch
 from torch.autograd import Variable
-from TorchELM import ELM,pseudoInverse 
+from TorchELM import pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
@@ -75,15 +75,13 @@ def process_data():
     for f in seed_list:
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
-            infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
             mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
-            infile.close()
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
@@ -152,10 +150,12 @@ def train_generate(batch_size):
         # load full batch if batchsize is greater than the seeds availible
         if (i + batch_size) > SPLIT_RATIO:
             x, y = generate_training_data(i, SPLIT_RATIO)
+            y=y*2-1
             x = x.astype('float32') / 255
         # load remaining data for last batch
         else:
             x, y = generate_training_data(i, i + batch_size)
+            y=y*2-1
             x = x.astype('float32') / 255
         yield (torch.Tensor(x), torch.Tensor(y))
 
@@ -218,7 +218,7 @@ def splice_seed(fl1, fl2, idxx):
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, model, idxx, splice,edge_num):
+def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
     adv_list = []
     ll = 2
     while fl[0] == fl[1]:
@@ -226,7 +226,8 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        out = model.forward_to_sig(x)[:,f]
+        K=optimizer.RBF_Kernel(x,optimizer.data)
+        out=torch.mm(K,optimizer.Net)[:,f]
         grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         val = np.sign(grads_value[0][idx])
@@ -237,7 +238,8 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
         if round_cnt % 2 == 0:
             splice_seed(fl[0], fl[1], idxx)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            out = model.forward_to_sig(x)[:,f]
+            K=optimizer.RBF_Kernel(x,optimizer.data)
+            out=torch.mm(K,optimizer.Net)[:,f]
             grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
@@ -245,7 +247,8 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
         else:
             splice_seed(fl[0], fl[1], idxx + edge_num)
             x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
-            out = model.forward_to_sig(x)[:,f]
+            K=optimizer.RBF_Kernel(x,optimizer.data)
+            out=torch.mm(K,optimizer.Net)[:,f]
             grads_value = torch.autograd.grad(out,x)[0].numpy()
             idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
             val = np.sign(grads_value[0][idx])
@@ -255,7 +258,7 @@ def gen_adv2(f, fl, model, idxx, splice,edge_num):
 
 
 # compute gradient for given input without sign
-def gen_adv3(f, fl, model, idxx, splice, edge_num):
+def gen_adv3(f, fl, optimizer, idxx, splice, edge_num):
     adv_list = []
     ll = 2
     while fl[0] == fl[1]:
@@ -263,7 +266,8 @@ def gen_adv3(f, fl, model, idxx, splice, edge_num):
 
     for index in range(ll):
         x = vectorize_file(fl[index])
-        out = model.forward_to_sig(x)[:,f]
+        K=optimizer.RBF_Kernel(x,optimizer.data)
+        out=torch.mm(K,optimizer.Net)[:,f]
         grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         #val = np.sign(grads_value[0][idx])
@@ -274,7 +278,8 @@ def gen_adv3(f, fl, model, idxx, splice, edge_num):
     if splice == 1 and round_cnt != 0:
         splice_seed(fl[0], fl[1], idxx)
         x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        out = model.forward_to_sig(x)[:,f]
+        K=optimizer.RBF_Kernel(x,optimizer.data)
+        out=torch.mm(K,optimizer.Net)[:,f]
         grads_value = torch.autograd.grad(out,x)[0].numpy()
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         # val = np.sign(grads_value[0][idx])
@@ -285,7 +290,7 @@ def gen_adv3(f, fl, model, idxx, splice, edge_num):
 
 
 # grenerate gradient information to guide furture muatation
-def gen_mutate2(model, edge_num, sign):
+def gen_mutate2(optimizer, edge_num, sign):
     
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
     
@@ -317,7 +322,7 @@ def gen_mutate2(model, edge_num, sign):
             print("number of feature " + str(idxx))
             index = int(interested_indice[idxx])
             fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, model, idxx, 1, edge_num)
+            adv_list = fn(index, fl, optimizer, idxx, 1, edge_num)
             tmp_list.append(adv_list)
             #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
             #bitmap and returns the gradients of each input byte w.r.t output 
@@ -329,18 +334,12 @@ def gen_mutate2(model, edge_num, sign):
 
 
 def build_model():
-    #Fixed batch size and epoch?
-    batch_size = 32
-    num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
-    epochs = 50                   #retrained on new bitmap sizes.
 
-    model = ELM(input_size=MAX_FILE_SIZE,output_activation=True,output_size=num_classes,hidden_size=4096,activation='relu')
+    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0)
     if args.enable_cuda:
-        model.cuda()
+        optimizer.cuda()#<-Will this work?
 
-    optimizer= pseudoInverse(params=model.parameters(),output_activation=True,C=0.001,L=0,a=0.0001)
-
-    return model,optimizer
+    return optimizer
 
 def accur_1(y_true, y_pred):
     y_true = torch.round(y_true)
@@ -350,20 +349,15 @@ def accur_1(y_true, y_pred):
     right_1_num = torch.sum(torch.float32(torch.logical_and(torch.bool(y_true), torch.bool(pred))), axis=-1)
     return torch.mean(torch.divide(right_1_num, torch.add(right_1_num, wrong_num)))
 
-def train(model,optimizer):
-    batch_size=len(seed_list)
+def train(optimizer):
+    batch_size=SPLIT_RATIO
     init = time.time()
-    model.train()
     for batch_idx, (data, target) in enumerate(train_generate(batch_size)):
         if args.enable_cuda:
             data, target = data.cuda(), target.cuda()
-        data, target = Variable(data,requires_grad=True, volatile=False), \
-                       Variable(target.type(torch.float32),requires_grad=True, volatile=False)
-        hiddenOut = model.forwardToHidden(data)
-        optimizer.train(inputs=hiddenOut, targets=target)
-        output = model.forward(data)
-        pred=output.data.max(1)[1]
-
+        data, target = Variable(data,requires_grad=False), \
+                       Variable(target.type(torch.float32),requires_grad=False)
+        optimizer.RBF_Kernel(data,optimizer.data)
     ending = time.time()
     print('training time: {:.2f}sec'.format(ending - init))
 
@@ -372,10 +366,10 @@ def gen_grad(data):
     global round_cnt
     t0 = time.time()
     process_data()
-    model,optimiser = build_model()
-    train(model,optimiser)
+    optimizer = build_model()
+    train(optimizer)
     #100-> 200 mutation cases?
-    gen_mutate2(model, 5, data[:5] == b"train") #500 -> 100 in paper
+    gen_mutate2(optimizer, 5, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     print(time.time() - t0)
 
