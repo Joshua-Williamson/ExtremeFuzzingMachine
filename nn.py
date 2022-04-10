@@ -27,9 +27,6 @@ from keras.callbacks import ModelCheckpoint
 HOST = '127.0.0.1'
 PORT = 12012
 
-#Max seed input file size allowed
-MAX_FILE_SIZE = 10000
-MAX_BITMAP_SIZE = 2000
 round_cnt = 0
 # Choose a seed for random initilzation
 # seed = int(time.time())
@@ -48,6 +45,10 @@ argvv = sys.argv[1:]
 
 # process training data from afl raw data
 def process_data():
+    #Max seed input file size allowed
+    MAX_MAX_FILE_SIZE = 10000
+    MAX_MAX_BITMAP_SIZE = 2000
+
     global MAX_BITMAP_SIZE
     global MAX_FILE_SIZE
     global SPLIT_RATIO
@@ -69,6 +70,13 @@ def process_data():
     max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
+    #Removes files over threshold
+    while round_cnt == 0 and MAX_FILE_SIZE > MAX_MAX_FILE_SIZE:
+        os.remove(cwd + '/seeds/' + max_file_name)
+        max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
+        MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
+
+
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
@@ -82,15 +90,13 @@ def process_data():
     for f in seed_list:
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
-            infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
             mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target ,stdin=infile)
-            infile.close()
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))

@@ -1839,9 +1839,7 @@ void fuzz_lop(char * grad_file, int sock){
     }
     int line_cnt=0;
     
-    int retrain_interval = 1000;
-    if(round_cnt == 0)
-        retrain_interval = 750;
+    int retrain_interval = 100;
     
     while ((nread = getline(&line, &llen, stream)) != -1) {        
         line_cnt = line_cnt+1;
