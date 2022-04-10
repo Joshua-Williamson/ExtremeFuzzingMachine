@@ -364,10 +364,13 @@ def train(optimizer):
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data,requires_grad=False), \
                        Variable(target.type(torch.float32),requires_grad=False)
-        optimizer.RBF_Kernel(data,optimizer.data)
-    ending = time.time()
-    print('training time: {:.2f}sec'.format(ending - init))
+        optimizer.data=data
+        optimizer.train(inputs=data, targets=target)
+        output = torch.mm(optimizer.K.T,optimizer.Net)
+        acc=accur_1(target,output)
 
+    ending = time.time()
+    print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
 
 def gen_grad(data):
     global round_cnt
