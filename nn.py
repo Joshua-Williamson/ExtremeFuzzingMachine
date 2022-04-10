@@ -349,12 +349,12 @@ def build_model():
     return optimizer
 
 def accur_1(y_true, y_pred):
-    y_true = torch.round(y_true)
-    pred = torch.round(y_pred)
-    summ = torch.float32(MAX_BITMAP_SIZE)
-    wrong_num = torch.subtract(summ, torch.sum(torch.float32(torch.equal(y_true, pred)), dim=-1))
-    right_1_num = torch.sum(torch.float32(torch.logical_and(torch.bool(y_true), torch.bool(pred))), axis=-1)
-    return torch.mean(torch.divide(right_1_num, torch.add(right_1_num, wrong_num)))
+    y_true = torch.sign(y_true - 1e-6)#Make better
+    pred =torch.sign(y_pred - 1e-6) 
+    summ = MAX_BITMAP_SIZE
+    right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
+    wrong_num = summ-right_num
+    return torch.mean(right_num/(right_num+wrong_num))
 
 def train(optimizer):
     batch_size=SPLIT_RATIO
