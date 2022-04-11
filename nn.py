@@ -18,7 +18,6 @@ import numpy as np
 import tensorflow as tf
 import keras.backend as K
 from collections import Counter
-from tensorflow import set_random_seed
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Activation
 from keras.callbacks import ModelCheckpoint
@@ -35,7 +34,6 @@ round_cnt = 0
 seed = 12
 np.random.seed(seed)
 random.seed(seed)
-set_random_seed(seed)
 seed_list = glob.glob('./seeds/*')
 new_seeds = glob.glob('./seeds/id_*')
 SPLIT_RATIO = len(seed_list)
@@ -387,8 +385,12 @@ def build_model():
     model.add(Dense(num_classes))
     model.add(Activation('sigmoid'))
 
-    #Adams
-    opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
+    if args.enable_gpu:
+        #Adams for tensor flow two
+        opt = keras.optimizers.Adam(lr=0.0001) #Fixed LR
+    else:
+        #Old version
+        opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
 
     model.compile(loss='binary_crossentropy', optimizer=opt, metrics=[accur_1])
     model.summary()
@@ -455,7 +457,19 @@ if __name__ == '__main__':
                         default=False,
                         action='store_true')
 
+
+    parser.add_argument('-gpu',
+                        '--enable-gpu',
+                        help='Enables GPU compatibility mode',
+                        default=False,
+                        action='store_true')
+
     parser.add_argument('target', nargs=argparse.REMAINDER)
+    global args
     args = parser.parse_args()
+    if args.enable_gpu:
+        #tf2 compat mode
+        tf.compat.v1.disable_eager_execution()
+
     #Start program and spin up server
     setup_server()
