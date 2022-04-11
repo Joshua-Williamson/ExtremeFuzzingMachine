@@ -76,6 +76,7 @@ def process_data():
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
 
     # obtain raw bitmaps
+    warning = False
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
     tmp_cnt = [] #Hold's ID's cumlatively for each seed input
     out = ''
@@ -90,7 +91,10 @@ def process_data():
             else:
                 out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
-            print('Warning: showmap returns none 0 exit status for seed: {0}'.format(f)) 
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
             #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
