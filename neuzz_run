@@ -1,0 +1,53 @@
+#!/bin/bash
+#                            -----------------------------
+#Smash for emergency use -> |kill -9 $(pgrep -f afl-fuzz) |
+#                            -----------------------------
+#Start with one hour of AFL-Fuzzing
+start_dir=$(pwd)
+cur_tim=$(date +%s)
+wrk_dir=$1_$cur_tim
+mkdir "$wrk_dir"
+
+# trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
+trap "kill -9 $(pgrep -f $kill_name)" SIGINT
+
+#AFL prep
+mkdir "$wrk_dir/AFL" 
+cd "$wrk_dir/AFL"
+cp -a "/home/ubuntu/NCC_FUZZ/NeuTwo/programs/$1/." . 
+bin=$(find -maxdepth 1 ! -name '*README.md*' ! -type d)
+cp /home/ubuntu/NCC_FUZZ/AFL/afl-fuzz .
+mkdir afl_in afl_out
+cp neuzz_in/id:000000* afl_in
+rm -r neuzz_in
+
+#Neuzz prep
+cd "$start_dir"
+mkdir "$wrk_dir/NEUZZ"
+mkdir "$wrk_dir/NEUZZ/neuzz_in" "$wrk_dir/NEUZZ/seeds"
+neuzz_run=`cat README.md | grep ./neuzz`
+neuzz_run=`echo $neuzz_run | xargs`
+cd /home/ubuntu/NCC_FUZZ/NeuTwo
+make
+cp neuzz "$start_dir/$wrk_dir/NEUZZ"
+cp nn.py "$start_dir/$wrk_dir/NEUZZ"
+cp TorchELM.py "$start_dir/$wrk_dir/NEUZZ"
+cp afl-showmap "$start_dir/$wrk_dir/NEUZZ"
+
+#Run AFL for 1 hour
+cd "$start_dir/$wrk_dir/AFL"
+timeout 1m ./afl-fuzz -i afl_in -o afl_out -m 1024 -t 1000 -- $bin @@ 
+kill_name="afl-fuzz"
+
+#Copy queue to neuzz
+cd "$start_dir/$wrk_dir/NEUZZ"
+cp -a "$start_dir/$wrk_dir/AFL/afl_out/queue/." neuzz_in
+rm -r neuzz_in/.state
+#timeout 1m python nn.py $bin #&>> nn_out.txt 
+nohup timeout 1m python nn.py $bin >> nn.log &
+pid=$!
+sleep 1
+timeout 1m $neuzz_run 2>&1 | tee neuzz_out.txt
+kill_name="neuzz"
+wait $pid
+exit
