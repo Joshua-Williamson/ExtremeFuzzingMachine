@@ -118,7 +118,7 @@ def process_data():
 
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
+    fit_bitmap = bitmap #np.unique(bitmap, axis=1)
     print("data dimension" + str(fit_bitmap.shape))
 
     # save training data
@@ -229,119 +229,67 @@ def splice_seed(fl1, fl2, idxx):
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
+def gen_adv2(fl, optimizer):
     adv_list = []
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
+    x = vectorize_file(fl)
+    K=optimizer.RBF_Kernel(x,optimizer.data)
 
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        val = np.sign(grads_value[0][idx])
-        adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        if round_cnt % 2 == 0:
-            splice_seed(fl[0], fl[1], idxx)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-        else:
-            splice_seed(fl[0], fl[1], idxx + edge_num)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
-
-    return adv_list
-
-
-# compute gradient for given input without sign
-def gen_adv3(f, fl, optimizer, idxx, splice, edge_num):
-    adv_list = []
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
-
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        #val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        splice_seed(fl[0], fl[1], idxx)
-        x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        # val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-
-    return adv_list
-
+    out=torch.mm(K,optimizer.Net)[:,:].reshape(MAX_BITMAP_SIZE,)
+    grads_value = torch.autograd.grad(torch.sum(out),x,retain_graph=True)[0].numpy().reshape(MAX_FILE_SIZE,)  
+    return grads_value
 
 # grenerate gradient information to guide furture muatation
 def gen_mutate2(optimizer, edge_num, sign):
     
-    #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
-    
-    tmp_list = []
-    # select seeds
-    print("#######debug" + str(round_cnt))
+    edge_num*=3    
+
     if round_cnt == 0:
         new_seed_list = seed_list
     else:
         new_seed_list = new_seeds
 
-    if len(new_seed_list) < edge_num: #2 X 500 random samples of seed list
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=True)]
-    else:
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=False)]
-    if len(new_seed_list) < edge_num:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=True)]
-    else:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=False)]
+    non_splice_num=edge_num
+    N_splice=edge_num-len(new_seed_list)
+    if N_splice > 0: 
+        non_splice_num=N_splice
+        if len(new_seed_list)>=N_splice:
+            replace=False
+        else:
+            replace=True
+        
+        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), N_splice, replace=True)]
+        rand_seed2 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), N_splice, replace=True)]
 
-    # function pointer for gradient computation
-    fn = gen_adv2 if sign else gen_adv3
+    grad_list=np.empty([300,MAX_FILE_SIZE])
+    file_list=np.array([])
+    for idxx in range(non_splice_num):
+        file = new_seed_list[idxx]
+        file_list=np.append(file_list,file)
+        grad_list[idxx]=gen_adv2(file, optimizer)
 
-    # select output neurons to compute gradient
-    interested_indice = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+    stage=idxx+1
+    if N_splice > 0:
+        for idxx in range(N_splice):
+            fl1,fl2=rand_seed1[idxx],rand_seed2[idxx]
+            splice_seed(fl1,fl2,idxx)
+            file='./splice_seeds/tmp_' + str(idxx)
+            file_list=np.append(file_list,file)
+            grad_list[stage+idxx]=gen_adv2(file, optimizer)
+    #I have a feeling it should be the biggest individual grad not averaged over each bit
+    sorted_inds=np.argsort(-np.mean(np.abs(grad_list),axis=1))
+    grad_list=grad_list[sorted_inds]
+    file_list=file_list[sorted_inds]
 
     with open('gradient_info_p', 'w') as f:
-        for idxx in range(len(interested_indice[:])):
-            print("number of feature " + str(idxx))
-            index = int(interested_indice[idxx])
-            fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, optimizer, idxx, 1, edge_num)
-            tmp_list.append(adv_list)
-            #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
-            #bitmap and returns the gradients of each input byte w.r.t output 
-            for ele in adv_list:
-                ele0 = [str(el) for el in ele[0]]
-                ele1 = [str(int(el)) for el in ele[1]]
-                ele2 = ele[2]
-                f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + "\n")
+        for idxx in range(edge_num):
+            grads_value=grad_list[idxx]
+            file=file_list[idxx]
+            idx = np.flip(np.argsort(np.absolute(grads_value), axis=0)[-MAX_FILE_SIZE:], 0)
+            val = np.sign(grads_value) if sign else np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
+            ele0 = [str(el) for el in idx]
+            ele1 = [str(int(el)) for el in val]
+            ele2 = file
+            f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + "\n")
 
 
 def build_model():
