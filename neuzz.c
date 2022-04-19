@@ -86,6 +86,7 @@ int havoc_blk_large = 8192;
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
+typedef int32_t  s32;
 #ifdef __x86_64__
 typedef unsigned long long u64;
 #else
@@ -554,6 +555,36 @@ void setup_dirs_fds(void) {
 
 }
 
+static void check_crash_handling(void) {
+
+  /* This is Linux specific, but I don't think there's anything equivalent on
+     *BSD, so we can just let it slide for now. */
+
+  s32 fd = open("/proc/sys/kernel/core_pattern", O_RDONLY);
+  u8  fchar;
+
+  if (fd < 0) return;
+
+  printf("Checking core_pattern...");
+
+  if (read(fd, &fchar, 1) == 1 && fchar == '|') {
+
+    printf("\n \n" "\033[31m"
+         "Hmm, your system is configured to send core dump notifications to an\n"
+         "    external utility. This will cause issues: there will be an extended delay\n"
+         "    between stumbling upon a crash and having this information relayed to the\n"
+         "    fuzzer via the standard waitpid() API.\n\n"
+
+         "    To avoid having crashes misinterpreted as timeouts, please log in as root\n" 
+         "    and temporarily modify /proc/sys/kernel/core_pattern, like so:\n\n"
+
+         "    echo core >/proc/sys/kernel/core_pattern\n \n" "\033[0m");
+    exit(1);
+  }
+ 
+  close(fd);
+
+}
 
 /* Detect @@ in args. */
 
@@ -1889,9 +1920,8 @@ void fuzz_lop(char * grad_file, int sock){
     }
     int line_cnt=0;
     
-    int retrain_interval = 1000;
-    if(round_cnt == 0)
-        retrain_interval = 750;
+    int retrain_interval = 300; /*for splicing*/
+    if(round_cnt == 0) retrain_interval = 200;
     
     while ((nread = getline(&line, &llen, stream)) != -1) {        
         line_cnt = line_cnt+1;
@@ -2119,7 +2149,7 @@ void main(int argc, char*argv[]){
     if (!out_file) setup_stdio_file();
     detect_file_args(argv + optind + 1);
     setup_targetpath(argv[optind]);
-    
+    check_crash_handling();
     copy_seeds(in_dir, out_dir);
     init_forkserver(argv+optind);
     srand(time(NULL));
