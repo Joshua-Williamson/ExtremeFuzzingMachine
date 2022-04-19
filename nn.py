@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+from ntpath import join
 import os
 import sys
 import glob
@@ -35,9 +36,70 @@ SPLIT_RATIO = len(seed_list)
 # get binary argv
 argvv = sys.argv[1:]
 
+def process_data_parallel():
+
+    call = subprocess.check_output
+
+    to_map_seed_list=list(set(glob.glob('./seeds/*')).difference(seed_list)).extend(list(set(glob.glob('./nocov/*')).difference(nocov_list)))
+    seed_list=glob.glob('./seeds/*')
+    nocov_list=glob.glob('./nocov/*')
+    SPLIT_RATIO=len(seed_list)+len(nocov_list)
+
+    cwd = os.getcwd()
+    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
+    MAX_FILE_SIZE_SEEDS = os.path.getsize(cwd + '/seeds/' + max_file_name)
+    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
+    MAX_FILE_SIZE_NOCOV = os.path.getsize(cwd + '/seeds/' + max_file_name)
+    MAX_FILE_SIZE = max([MAX_FILE_SIZE_SEEDS,MAX_FILE_SIZE_NOCOV])
+
+    out = ''
+    pad=0
+    bitmaps=np.empty(len(to_map_seed_list),MAX_BITMAP_SIZE)
+    for ind,f in enumerate(to_map_seed_list):
+        tmp_list = [] #Keeps list of ID's for each seed file inside loop
+        try:
+            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
+            mem_lim= '1024' if not args.enable_asan else 'none'
+            if argvv[0] == './strip':
+                raise NotImplementedError
+                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
+            else:
+                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+        except subprocess.CalledProcessError as e:
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+
+        for line in out.splitlines():
+            edge = line.split(b':')[0]
+            tmp_list.append(edge)
+        
+        tmp_list=np.array(tmp_list)
+        not_seen_already=np.invert(np.in1d(tmp_list,label))
+        pad+=sum(not_seen_already)
+        bitmaps=np.pad(bitmaps,[(0,0),(0,sum(not_seen_already))], mode='constant')
+        label=np.append(label,tmp_list[not_seen_already])
+
+        bitmaps[ind]=np.in1d(label,tmp_list).astype('int')
+
+    print("data dimension" + str(bitmaps.shape))
+
+    old_bitmaps=glob.glob("./bitmaps/*")
+    for bitmap in old_bitmaps:
+        tmp=np.load(bitmap)
+        tmp=np.pad(tmp,[(0,20)],mode='constant')
+        np.save(bitmap,tmp)
+
+    # save training data
+    MAX_BITMAP_SIZE = bitmaps.shape[1] 
+    for idx, i in enumerate(to_map_seed_list):
+        file_name = "./bitmaps/" + i.split('/')[-1]
+        np.save(file_name, bitmaps[idx])
 
 # process training data from afl raw data
-def process_data():
+def process_data_init():
     #Max seed input file size allowed
     MAX_MAX_FILE_SIZE = 10000
     MAX_MAX_BITMAP_SIZE = 2000
@@ -46,7 +108,9 @@ def process_data():
     global MAX_FILE_SIZE
     global SPLIT_RATIO
     global seed_list
+    global nocov_list
     global new_seeds
+    global label
 
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
@@ -74,6 +138,8 @@ def process_data():
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
+    os.path.isdir("./nocov/") or os.makedirs("./novcov")
+    nocov_list=glob.glob('./nocov/*')
 
     # obtain raw bitmaps
     warning = False
@@ -108,7 +174,7 @@ def process_data():
 
     # save bitmaps to individual numpy label
     # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
-    label = [int(f[0]) for f in counter]
+    label = np.array([int(f[0]) for f in counter])
     bitmap = np.zeros((len(seed_list), len(label)))
     for idx, i in enumerate(seed_list):
         tmp = raw_bitmap[i]
@@ -132,6 +198,7 @@ def process_data():
 def generate_training_data(lb, ub):
     seed = np.zeros((ub - lb, MAX_FILE_SIZE))
     bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
+    train_list=seed_list+nocov_list
     for i in range(lb, ub):
         tmp = open(seed_list[i], 'rb').read()
         ln = len(tmp)
@@ -155,6 +222,7 @@ def step_decay(epoch):
 
 def train_generate(batch_size):
     global seed_list
+    global nocov_list
     np.random.shuffle(seed_list)
     # load a batch of training data
     for i in range(0, SPLIT_RATIO, batch_size):
@@ -379,7 +447,6 @@ def train(optimizer):
 def gen_grad(data):
     global round_cnt
     t0 = time.time()
-    process_data()
     optimizer = build_model()
     train(optimizer)
     #100-> 200 mutation cases?
@@ -401,6 +468,7 @@ def setup_server():
     print("Waiting for neuzz engine")
     conn, addr = sock.accept()
     print('Connected by neuzz engine ' + str(addr))
+    process_data_init()
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
@@ -408,8 +476,11 @@ def setup_server():
         if not data:
             break
         else:
-            gen_grad(data)
-            conn.sendall(b"start")
+            if data == b"MAP":
+                process_data_parallel()
+            else:
+                gen_grad(data)
+                conn.sendall(b"start")
     conn.close()
 
 
