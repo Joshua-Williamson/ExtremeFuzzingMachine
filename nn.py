@@ -38,11 +38,22 @@ argvv = sys.argv[1:]
 
 def process_data_parallel():
 
+    global MAX_BITMAP_SIZE
+    global MAX_FILE_SIZE
+    global SPLIT_RATIO
+    global seed_list
+    global nocov_list
+    global new_seeds
+    global label
+
     call = subprocess.check_output
 
-    to_map_seed_list=list(set(glob.glob('./seeds/*')).difference(seed_list)).extend(list(set(glob.glob('./nocov/*')).difference(nocov_list)))
+    new_seeds = glob.glob('./seeds/id_*')
+    old_seed_list=seed_list
+    old_nocov_list=nocov_list
     seed_list=glob.glob('./seeds/*')
     nocov_list=glob.glob('./nocov/*')
+    to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
     SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
     cwd = os.getcwd()
@@ -53,8 +64,9 @@ def process_data_parallel():
     MAX_FILE_SIZE = max([MAX_FILE_SIZE_SEEDS,MAX_FILE_SIZE_NOCOV])
 
     out = ''
+    warning = False
     pad=0
-    bitmaps=np.empty(len(to_map_seed_list),MAX_BITMAP_SIZE)
+    bitmaps=np.empty([len(to_map_seed_list),MAX_BITMAP_SIZE])
     for ind,f in enumerate(to_map_seed_list):
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
@@ -74,7 +86,7 @@ def process_data_parallel():
 
         for line in out.splitlines():
             edge = line.split(b':')[0]
-            tmp_list.append(edge)
+            tmp_list.append(int(edge))
         
         tmp_list=np.array(tmp_list)
         not_seen_already=np.invert(np.in1d(tmp_list,label))
@@ -89,7 +101,7 @@ def process_data_parallel():
     old_bitmaps=glob.glob("./bitmaps/*")
     for bitmap in old_bitmaps:
         tmp=np.load(bitmap)
-        tmp=np.pad(tmp,[(0,20)],mode='constant')
+        tmp=np.pad(tmp,[(0,pad)],mode='constant')
         np.save(bitmap,tmp)
 
     # save training data
@@ -138,7 +150,7 @@ def process_data_init():
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
-    os.path.isdir("./nocov/") or os.makedirs("./novcov")
+    os.path.isdir("./nocov/") or os.makedirs("./nocov")
     nocov_list=glob.glob('./nocov/*')
 
     # obtain raw bitmaps
@@ -174,7 +186,7 @@ def process_data_init():
 
     # save bitmaps to individual numpy label
     # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
-    label = np.array([int(f[0]) for f in counter])
+    label = [int(f[0]) for f in counter]
     bitmap = np.zeros((len(seed_list), len(label)))
     for idx, i in enumerate(seed_list):
         tmp = raw_bitmap[i]
@@ -184,7 +196,7 @@ def process_data_init():
 
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
+    fit_bitmap = bitmap
     print("data dimension" + str(fit_bitmap.shape))
 
     # save training data
@@ -192,6 +204,8 @@ def process_data_init():
     for idx, i in enumerate(seed_list):
         file_name = "./bitmaps/" + i.split('/')[-1]
         np.save(file_name, fit_bitmap[idx])
+    
+    label=np.array(label)
 
 
 # training data generator
@@ -200,14 +214,14 @@ def generate_training_data(lb, ub):
     bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
     train_list=seed_list+nocov_list
     for i in range(lb, ub):
-        tmp = open(seed_list[i], 'rb').read()
+        tmp = open(train_list[i], 'rb').read()
         ln = len(tmp)
         if ln < MAX_FILE_SIZE:
             tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
         seed[i - lb] = [j for j in bytearray(tmp)]
 
     for i in range(lb, ub):
-        file_name = "./bitmaps/" + seed_list[i].split('/')[-1] + ".npy"
+        file_name = "./bitmaps/" + train_list[i].split('/')[-1] + ".npy"
         bitmap[i - lb] = np.load(file_name)
     return seed, bitmap
 
@@ -375,7 +389,7 @@ def gen_mutate2(optimizer, edge_num, sign):
     
     tmp_list = []
     # select seeds
-    print("#######debug" + str(round_cnt))
+    #print("#######debug" + str(round_cnt))
     if round_cnt == 0:
         new_seed_list = seed_list
     else:
@@ -398,7 +412,7 @@ def gen_mutate2(optimizer, edge_num, sign):
 
     with open('gradient_info_p', 'w') as f:
         for idxx in range(len(interested_indice[:])):
-            print("number of feature " + str(idxx))
+            #print("number of feature " + str(idxx))
             index = int(interested_indice[idxx])
             fl = [rand_seed1[idxx], rand_seed2[idxx]]
             adv_list = fn(index, fl, optimizer, idxx, 1, edge_num)
@@ -452,7 +466,7 @@ def gen_grad(data):
     #100-> 200 mutation cases?
     gen_mutate2(optimizer, 100, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
-    print(time.time() - t0)
+    #print(time.time() - t0)
 
 
 def setup_server():
@@ -468,17 +482,27 @@ def setup_server():
     print("Waiting for neuzz engine")
     conn, addr = sock.accept()
     print('Connected by neuzz engine ' + str(addr))
+    t0=time.time()
     process_data_init()
+    print("Initial map in: " + str(time.time()-t0) + " seconds")
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
+        print("Sleeping")
         data = conn.recv(1024)
         if not data:
             break
         else:
-            if data == b"MAP":
+            if data[0:3] == b"MAP":
+                print("Remapping")
+                t0=time.time()
                 process_data_parallel()
+                print("Remapped in: " + str(time.time()-t0) + " seconds")
             else:
+                print("Retraining")
+                t0=time.time()
+                process_data_parallel()
+                print("Remapped in: " + str(time.time()-t0) + " seconds")
                 gen_grad(data)
                 conn.sendall(b"start")
     conn.close()

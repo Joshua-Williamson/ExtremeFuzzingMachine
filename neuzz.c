@@ -94,6 +94,9 @@ typedef uint64_t u64;
 #endif /* ^__x86_64__ */
 
 unsigned long total_execs;              /* Total number of execs */
+unsigned long execs_per_line=0;         /* Number of execs per line of gradient file explored*/
+int write_nocov;                        /* Bool to write or not to write a nocov */
+int nocov_statistic;                    /*Threshold for a number to be under for a nocov case to be written*/
 static int shm_id;                      /* ID of the SHM region */
 static int mem_limit  = 1024;           /* Maximum memory limit for target program */
 static int cpu_aff = -1;                /* Selected CPU core */
@@ -1272,7 +1275,7 @@ void gen_mutate(){
                 close(mut_fd);
                 mut_cnt = mut_cnt + 1;
             }
-            else if(count_seeds("nocov","+nocov") < 300 && rand() % 100000 == 1){
+            else if(write_nocov && rand() % 1000000 < nocov_statistic){
                 char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
                 int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
                 ck_write(mut_fd, out_buf1, len, mut_fn);
@@ -1337,7 +1340,7 @@ void gen_mutate(){
                 free(mut_fn);
                 mut_cnt = mut_cnt + 1;
             }
-            else if(count_seeds("nocov","+nocov") < 300 && rand() % 100000 == 1){
+            else if(write_nocov && rand() % 1000000 < nocov_statistic){
                 char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
                 int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
                 ck_write(mut_fd, out_buf1, len, mut_fn);
@@ -1553,7 +1556,7 @@ void gen_mutate_slow(){
                 close(mut_fd);
                 mut_cnt = mut_cnt + 1;
             }
-            else if(count_seeds("nocov","+nocov") < 300 && rand() % 100000 == 1){
+            else if(write_nocov && rand() % 1000000 < nocov_statistic){
                 char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
                 int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
                 ck_write(mut_fd, out_buf1, len, mut_fn);
@@ -1618,7 +1621,7 @@ void gen_mutate_slow(){
                 free(mut_fn);
                 mut_cnt = mut_cnt + 1;
             }
-            else if(count_seeds("nocov","+nocov") < 300 && rand() % 100000 == 1){
+            else if(write_nocov && rand() % 1000000 < nocov_statistic){
                 char* mut_fn = alloc_printf("%s/id_%d_%d_%06d_+nocov", "nocov", round_cnt, iter, mut_cnt);
                 int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
                 ck_write(mut_fd, out_buf1, len, mut_fn);
@@ -1919,12 +1922,23 @@ void fuzz_lop(char * grad_file, int sock){
         exit(EXIT_FAILURE);
     }
     int line_cnt=0;
-    
+    int total_execs_old=0;
+    float nocov_seeds_threshold=10000.;
     int retrain_interval = 300; /*for splicing*/
-    if(round_cnt == 0) retrain_interval = 200;
+    int remap_interval = retrain_interval/4;
+    if(round_cnt == 0){
+        retrain_interval = 200;
+        remap_interval=retrain_interval/4;
+    }
     
     while ((nread = getline(&line, &llen, stream)) != -1) {        
         line_cnt = line_cnt+1;
+        /*Nocov stuff*/
+        execs_per_line = total_execs -total_execs_old;
+        total_execs_old = total_execs;
+        write_nocov = count_seeds("nocov","+nocov") < nocov_seeds_threshold*(1+round_cnt);
+        if(line_cnt ==1) write_nocov =0;
+        nocov_statistic = 1000000*(nocov_seeds_threshold/(retrain_interval*execs_per_line));
         
         /* send message to python module */
         if(line_cnt == retrain_interval){
@@ -1942,6 +1956,11 @@ void fuzz_lop(char * grad_file, int sock){
                 fast = 0;              /* Has more random stuff built into it to get it unstuck!*/
                 printf("slow stage\n");
             }
+        }
+
+        if ((line_cnt % remap_interval) == 0 && line_cnt != retrain_interval){
+            printf("Remap Signal \n");
+            send(sock,"MAP", 5,0);
         }
          
         /* parse gradient info */
