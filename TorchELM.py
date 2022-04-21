@@ -18,11 +18,7 @@ class pseudoInverse(nn.Module):
         self.L=L
         self.forgettingfactor=forgettingfactor
         self.dimInput=input_dim
-        self.M=Variable(torch.inverse(self.C*torch.eye(self.dimInput)),requires_grad=False, volatile=False)
 
-        if self.is_cuda:
-            self.M=self.M.cuda()
-        
     def pseudoBig(self,inputs,oneHotTarget):
         xtx =inputs 
         dimInput=inputs.size()[1]
