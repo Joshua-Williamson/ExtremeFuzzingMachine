@@ -1823,11 +1823,6 @@ void fuzz_lop(char *grad_file, int sock) {
 
   /* parse the gradient to guide fuzzing */
   int line_cnt = 0;
-  if (line_cnt != 0) {
-      send(sock, "train", 5, 0);
-      printf("Train Signal\n");
-  }
-  else printf("Skipping this part\n");
 
   while ((nread = getline(&line, &llen, stream)) != -1) {
     line_cnt = line_cnt + 1;
@@ -1889,6 +1884,8 @@ void fuzz_lop(char *grad_file, int sock) {
   log("havoc use time %fs\n", difftime(tt3, tt2));
   free(line);
   fclose(stream);
+  send(sock, "train", 5, 0);
+  printf("Train Signal\n");
 }
 
 /* connect to python NN module, then read the gradient file to guide fuzzing */
