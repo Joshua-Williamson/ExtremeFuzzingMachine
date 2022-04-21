@@ -71,7 +71,7 @@ def process_data():
 
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
-    os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
+    os.path.isdir("./havoc_seeds/") or os.makedirs("./havoc_seeds/")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
 
@@ -118,7 +118,7 @@ def process_data():
 
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
+    fit_bitmap = bitmap
     print("data dimension" + str(fit_bitmap.shape))
 
     # save training data
@@ -244,27 +244,6 @@ def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
         val = np.sign(grads_value[0][idx])
         adv_list.append((idx, val, fl[index]))
 
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        if round_cnt % 2 == 0:
-            splice_seed(fl[0], fl[1], idxx)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-        else:
-            splice_seed(fl[0], fl[1], idxx + edge_num)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
-
     return adv_list
 
 
@@ -284,18 +263,6 @@ def gen_adv3(f, fl, optimizer, idxx, splice, edge_num):
         #val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
         adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        splice_seed(fl[0], fl[1], idxx)
-        x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        # val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
 
     return adv_list
 
