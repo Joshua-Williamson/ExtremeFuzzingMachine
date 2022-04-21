@@ -118,7 +118,7 @@ def process_data():
 
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
+    fit_bitmap = bitmap
     print("data dimension" + str(fit_bitmap.shape))
 
     # save training data
@@ -346,9 +346,9 @@ def gen_mutate2(optimizer, edge_num, sign):
 
 def build_model():
 
-    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0)
+    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0,is_cuda=args.enable_cuda)
     if args.enable_cuda:
-        optimizer.cuda()#<-Will this work?
+        optimizer.to(device)#<-Will this work?
 
     return optimizer
 
@@ -432,6 +432,10 @@ if __name__ == '__main__':
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args
+    global device
     args = parser.parse_args()
+    if args.enable_cuda:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("Using Device: " + str(device))
     #Start program and spin up server
     setup_server()
