@@ -1925,10 +1925,10 @@ void fuzz_lop(char * grad_file, int sock){
     int total_execs_old=0;
     float nocov_seeds_threshold=10000.;
     int retrain_interval = 300; /*for splicing*/
-    int remap_interval = retrain_interval/4;
+    int remap_interval =50;
     if(round_cnt == 0){
         retrain_interval = 200;
-        remap_interval=retrain_interval/4;
+        remap_interval=50;
     }
     
     while ((nread = getline(&line, &llen, stream)) != -1) {        
