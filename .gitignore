@@ -1,3 +1,5 @@
 neuzz_dbg
 neuzz
 __pycache__/TorchELM.cpython-39.pyc
+seeds/.cur_input
+log_fuzz
