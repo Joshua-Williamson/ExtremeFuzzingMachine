@@ -110,9 +110,20 @@ def process_data_parallel():
         np.save(file_name, bitmaps[idx])
 
 def reduce_variable_files():
+
+    global vari_seed_list
+    global havoc_seed_list
+
+    if round_cnt != 1:
+        old_vari_seed_list=vari_seed_list
+        old_havoc_seed_list=havoc_seed_list
+    else:
+        old_vari_seed_list=[]
+        old_havoc_seed_list=[]
+
     vari_seed_list = glob.glob('./vari_seeds/*')
     havoc_seed_list = glob.glob('./havoc_seeds/*')
-    minimise_seed_list = vari_seed_list + havoc_seed_list
+    minimise_seed_list =list(set(vari_seed_list).difference(old_vari_seed_list))+(list(set(havoc_seed_list).difference(old_havoc_seed_list))) 
 
     call = subprocess.check_output
 
@@ -120,7 +131,7 @@ def reduce_variable_files():
     for f in minimise_seed_list:
         outfile = "./seeds/"+f.split('/')[-1]+'min'
         try:
-            out = call(['timeout','30s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile ,'/dev/stdout', '-m', '1024', '-t', '1000','-l',MAX_FILE_SIZE] + args.target)
+            out = call(['timeout','30s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -174,12 +185,6 @@ def process_data_init():
     cwd = os.getcwd()
     max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
-
-    #Removes files over threshold
-    while round_cnt == 0 and MAX_FILE_SIZE > MAX_MAX_FILE_SIZE:
-        os.remove(cwd + '/seeds/' + max_file_name)
-        max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
-        MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")

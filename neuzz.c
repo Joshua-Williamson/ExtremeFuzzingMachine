@@ -1417,7 +1417,7 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
     free(mut_fn);
     close(mut_fd);
   }
-  else if (write_nocov && rand() % 1000000 < nocov_statistic) {
+  else if (write_nocov && rand() % 1000000 < nocov_statistic && out_dir != "vari_seeds") {
     char *mut_fn = alloc_printf("%s/id_%d_%06d_+nocov", "nocov", round_cnt, mut_cnt++);
     /*add_file_to_container(file_container, mut_fn); <--- do i want this?*/
     int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
