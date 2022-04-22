@@ -1722,6 +1722,7 @@ void dry_run(char *dir) {
 
         write_to_testcase(out_buf1, file_len);
         int fault = run_target(exec_tmout);
+        int ret = has_new_bits(virgin_bits);
         if (fault != 0 && fault == FAULT_CRASH) {
           char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
           int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
