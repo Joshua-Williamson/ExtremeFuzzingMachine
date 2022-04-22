@@ -1417,9 +1417,39 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
     free(mut_fn);
     close(mut_fd);
   }
-  else if (write_nocov && rand() % 1000000 < nocov_statistic && out_dir != "vari_seeds") {
+  else if (write_nocov && rand() % 1000000 < nocov_statistic) {
     char *mut_fn = alloc_printf("%s/id_%d_%06d_+nocov", "nocov", round_cnt, mut_cnt++);
     /*add_file_to_container(file_container, mut_fn); <--- do i want this?*/
+    int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ck_write(mut_fd, out_buf, length, mut_fn);
+    free(mut_fn);
+    close(mut_fd);
+  }
+}
+
+void execute_target_program_vari(char* out_buf, size_t length, char* out_dir) {
+  write_to_testcase(out_buf, length);
+  int fault = run_target(exec_tmout);
+  if (fault != 0 && fault == FAULT_CRASH) {
+    char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
+    int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ck_write(mut_fd, out_buf, length, mut_fn);
+    free(mut_fn);
+    close(mut_fd);
+  }
+  /* save mutations that find new edges. */
+  int ret = has_new_bits(virgin_bits);
+  if (ret == 2) {
+    char *mut_fn = alloc_printf("%s/id_%d_%06d_cov", out_dir, round_cnt, mut_cnt++);
+    add_file_to_container(file_container, mut_fn);
+    int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    ck_write(mut_fd, out_buf, length, mut_fn);
+    free(mut_fn);
+    close(mut_fd);
+  }
+  else if (ret == 1) {
+    char *mut_fn = alloc_printf("%s/id_%d_%06d", out_dir, round_cnt, mut_cnt++);
+    add_file_to_container(file_container, mut_fn);
     int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ck_write(mut_fd, out_buf, length, mut_fn);
     free(mut_fn);
@@ -1513,7 +1543,7 @@ void gen_mutate() {
     memcpy(out_buf3, out_buf, del_loc);
     memcpy(out_buf3 + del_loc, out_buf + rand_loc, cut_len);
     memcpy(out_buf3 + del_loc + cut_len, out_buf + del_loc, len - del_loc);
-    execute_target_program(out_buf3, len + cut_len, "vari_seeds");
+    execute_target_program_vari(out_buf3, len + cut_len, "vari_seeds");
   }
   container_to_queue();
   free_file_container(file_container);

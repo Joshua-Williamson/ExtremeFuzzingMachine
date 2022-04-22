@@ -360,7 +360,7 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
   if (stop_soon) {
 
     if (!quiet_mode) SAYF(cRST cLRD "\n+++ Minimization aborted by user +++\n" cRST);
-    close(write_to_file(out_file, in_data, in_len));
+    /*close(write_to_file(out_file, in_data, in_len));*/ /*We dont want to write if aborted*/
     exit(1);
 
   }

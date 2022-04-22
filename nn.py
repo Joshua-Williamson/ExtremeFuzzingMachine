@@ -55,13 +55,6 @@ def process_data_parallel():
     to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
     SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
-    cwd = os.getcwd()
-    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
-    MAX_FILE_SIZE_SEEDS = os.path.getsize(cwd + '/seeds/' + max_file_name)
-    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
-    MAX_FILE_SIZE_NOCOV = os.path.getsize(cwd + '/seeds/' + max_file_name)
-    MAX_FILE_SIZE = max([MAX_FILE_SIZE_SEEDS,MAX_FILE_SIZE_NOCOV])
-
     out = ''
     warning = False
     pad=0
@@ -131,7 +124,7 @@ def reduce_variable_files():
     for f in minimise_seed_list:
         outfile = "./seeds/"+f.split('/')[-1]+'min'
         try:
-            out = call(['timeout','30s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
+            out = call(['timeout','10s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -152,9 +145,9 @@ def cull_nocov():
         for file in deletes:
             os.remove(file)
     
-    nocov_list=glob.glob('./nocov/*')
-    len_nocov_list=len(nocov_list)
-    SPLIT_RATIO=len(seed_list)+len(nocov_list)
+        nocov_list=glob.glob('./nocov/*')
+        len_nocov_list=len(nocov_list)
+        SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
 
 # process training data from afl raw data
