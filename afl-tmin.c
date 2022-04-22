@@ -83,7 +83,9 @@ static u8  crash_mode,                /* Crash-centric mode?               */
            exit_crash,                /* Treat non-zero exit as crash?     */
            edges_only,                /* Ignore hit counts?                */
            exact_mode,                /* Require path match for crashes?   */
-           use_stdin = 1;             /* Use stdin for program input?      */
+           use_stdin = 1,             /* Use stdin for program input?      */
+           quiet_mode;                /* Suppress output?                  */
+
 
 static volatile u8
            stop_soon,                 /* Ctrl-C pressed?                   */
@@ -222,8 +224,8 @@ static void read_initial_file(void) {
 
   close(fd);
 
-  OKF("Read %u byte%s from '%s'.", in_len, in_len == 1 ? "" : "s", in_file);
-  if (threshold_given){
+  if (!quiet_mode) OKF("Read %u byte%s from '%s'.", in_len, in_len == 1 ? "" : "s", in_file);
+  if (threshold_given && !quiet_mode){
     OKF("Reducing seeds to a thresold of %u", threshold);
 
   }
@@ -357,7 +359,7 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
 
   if (stop_soon) {
 
-    SAYF(cRST cLRD "\n+++ Minimization aborted by user +++\n" cRST);
+    if (!quiet_mode) SAYF(cRST cLRD "\n+++ Minimization aborted by user +++\n" cRST);
     close(write_to_file(out_file, in_data, in_len));
     exit(1);
 
@@ -448,7 +450,7 @@ static void minimize(char** argv) {
 
   if (set_len < TMIN_SET_MIN_SIZE) set_len = TMIN_SET_MIN_SIZE;
 
-  ACTF(cBRI "Stage #0: " cRST "One-time block normalization...");
+  if (!quiet_mode) ACTF(cBRI "Stage #0: " cRST "One-time block normalization...");
 
   while (set_pos < in_len) {
 
@@ -481,12 +483,12 @@ static void minimize(char** argv) {
 
   alpha_d_total += alpha_del0;
 
-  OKF("Block normalization complete, %u byte%s replaced.", alpha_del0,
+  if (!quiet_mode) OKF("Block normalization complete, %u byte%s replaced.", alpha_del0,
       alpha_del0 == 1 ? "" : "s");
 
 next_pass:
 
-  ACTF(cYEL "--- " cBRI "Pass #%u " cYEL "---", ++cur_pass);
+  if (!quiet_mode) ACTF(cYEL "--- " cBRI "Pass #%u " cYEL "---", ++cur_pass);
   changed_any = 0;
 
   /******************
@@ -496,7 +498,7 @@ next_pass:
   del_len = next_p2(in_len / TRIM_START_STEPS);
   stage_o_len = in_len;
 
-  ACTF(cBRI "Stage #1: " cRST "Removing blocks of data...");
+  if (!quiet_mode) ACTF(cBRI "Stage #1: " cRST "Removing blocks of data...");
 
 next_del_blksize:
 
@@ -504,7 +506,7 @@ next_del_blksize:
   del_pos  = 0;
   prev_del = 1;
 
-  SAYF(cGRA "    Block length = %u, remaining size = %u\n" cRST,
+  if (!quiet_mode) SAYF(cGRA "    Block length = %u, remaining size = %u\n" cRST,
        del_len, in_len);
 
   while (del_pos < in_len) {
@@ -550,7 +552,7 @@ next_del_blksize:
       
     /*JW add check here*/
     if (threshold_given && in_len <= threshold){
-      SAYF(cGRA "    Threshold met, final size = %u\n" cRST, in_len);
+      if (!quiet_mode) SAYF(cGRA "    Threshold met, final size = %u\n" cRST, in_len);
       return;
     }
 
@@ -563,9 +565,9 @@ next_del_blksize:
 
   }
 
-  OKF("Block removal complete, %u bytes deleted.", stage_o_len - in_len);
+  if (!quiet_mode) OKF("Block removal complete, %u bytes deleted.", stage_o_len - in_len);
 
-  if (!in_len && changed_any)
+  if (!in_len && changed_any && !quiet_mode)
     WARNF(cLRD "Down to zero bytes - check the command line and mem limit!" cRST);
 
   if (cur_pass > 1 && !changed_any) goto finalize_all;
@@ -585,7 +587,7 @@ next_del_blksize:
     alpha_map[in_data[i]]++;
   }
 
-  ACTF(cBRI "Stage #2: " cRST "Minimizing symbols (%u code point%s)...",
+  if (!quiet_mode) ACTF(cBRI "Stage #2: " cRST "Minimizing symbols (%u code point%s)...",
        alpha_size, alpha_size == 1 ? "" : "s");
 
   for (i = 0; i < 256; i++) {
@@ -615,7 +617,7 @@ next_del_blksize:
 
   alpha_d_total += alpha_del1;
 
-  OKF("Symbol minimization finished, %u symbol%s (%u byte%s) replaced.",
+  if (!quiet_mode) OKF("Symbol minimization finished, %u symbol%s (%u byte%s) replaced.",
       syms_removed, syms_removed == 1 ? "" : "s",
       alpha_del1, alpha_del1 == 1 ? "" : "s");
 
@@ -625,7 +627,7 @@ next_del_blksize:
 
   alpha_del2 = 0;
 
-  ACTF(cBRI "Stage #3: " cRST "Character minimization...");
+  if (!quiet_mode) ACTF(cBRI "Stage #3: " cRST "Character minimization...");
 
   memcpy(tmp_buf, in_data, in_len);
 
@@ -650,14 +652,14 @@ next_del_blksize:
 
   alpha_d_total += alpha_del2;
 
-  OKF("Character minimization done, %u byte%s replaced.",
+  if (!quiet_mode) OKF("Character minimization done, %u byte%s replaced.",
       alpha_del2, alpha_del2 == 1 ? "" : "s");
 
   if (changed_any) goto next_pass;
 
 finalize_all:
 
-  SAYF("\n"
+  if (!quiet_mode) SAYF("\n"
        cGRA "     File size reduced by : " cRST "%0.02f%% (to %u byte%s)\n"
        cGRA "    Characters simplified : " cRST "%0.02f%%\n"
        cGRA "     Number of execs done : " cRST "%u\n"
@@ -667,7 +669,7 @@ finalize_all:
        total_execs, missed_paths, missed_crashes, missed_hangs ? cLRD : "",
        missed_hangs);
 
-  if (total_execs > 50 && missed_hangs * 10 > total_execs)
+  if (total_execs > 50 && missed_hangs * 10 > total_execs && !quiet_mode)
     WARNF(cLRD "Frequent timeouts - results may be skewed." cRST);
 
 }
@@ -828,7 +830,7 @@ static void detect_file_args(char** argv) {
 
 static void usage(u8* argv0) {
 
-  SAYF("\n%s [ options ] -- /path/to/target_app [ ... ]\n\n"
+  if (!quiet_mode) SAYF("\n%s [ options ] -- /path/to/target_app [ ... ]\n\n"
 
        "Required parameters:\n\n"
 
@@ -1003,9 +1005,8 @@ int main(int argc, char** argv) {
 
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
-  SAYF(cCYA "afl-tmin " cBRI VERSION cRST " by <lcamtuf@google.com>, modified by Joshua Williamson for NeuTwo\n");
 
-  while ((opt = getopt(argc,argv,"+i:o:f:m:t:l:B:xeQV")) > 0)
+  while ((opt = getopt(argc,argv,"+i:o:f:m:t:l:B:xeqQV")) > 0)
 
     switch (opt) {
 
@@ -1099,6 +1100,12 @@ int main(int argc, char** argv) {
 
         break;
 
+      case 'q':
+
+        if (quiet_mode) FATAL("Multiple -q options not supported");
+        quiet_mode = 1;
+        break;
+
       case 'Q':
 
         if (qemu_mode) FATAL("Multiple -Q options not supported");
@@ -1138,6 +1145,7 @@ int main(int argc, char** argv) {
 
     }
 
+  if (!quiet_mode) SAYF(cCYA "afl-tmin " cBRI VERSION cRST " by <lcamtuf@google.com>, modified by Joshua Williamson for NeuTwo\n");
   if (optind == argc || !in_file || !out_file) usage(argv[0]);
 
   setup_shm();
@@ -1155,11 +1163,11 @@ int main(int argc, char** argv) {
 
   exact_mode = !!getenv("AFL_TMIN_EXACT");
 
-  SAYF("\n");
+  if (!quiet_mode) SAYF("\n");
 
   read_initial_file();
 
-  ACTF("Performing dry run (mem limit = %llu MB, timeout = %u ms%s)...",
+  if (!quiet_mode) ACTF("Performing dry run (mem limit = %llu MB, timeout = %u ms%s)...",
        mem_limit, exec_tmout, edges_only ? ", edges only" : "");
 
   run_target(use_argv, in_data, in_len, 1);
@@ -1169,29 +1177,31 @@ int main(int argc, char** argv) {
 
   if (!crash_mode) {
 
-     OKF("Program terminates normally, minimizing in " 
+     if (!quiet_mode) OKF("Program terminates normally, minimizing in " 
          cCYA "instrumented" cRST " mode.");
 
      if (!anything_set()) FATAL("No instrumentation detected.");
 
   } else {
 
-     OKF("Program exits with a signal, minimizing in " cMGN "%scrash" cRST
+     if (!quiet_mode) OKF("Program exits with a signal, minimizing in " cMGN "%scrash" cRST
          " mode.", exact_mode ? "EXACT " : "");
 
   }
 
   minimize(use_argv);
 
-  if (in_len > threshold) ACTF("Threshold not met as %u > %u, not writing out",in_len,threshold);
-  else ACTF("Writing output to '%s'...", out_file);
+  if (!quiet_mode){
+    if (in_len > threshold) ACTF("Threshold not met as %u > %u, not writing out",in_len,threshold);
+    else ACTF("Writing output to '%s'...", out_file);
+  }
 
   unlink(prog_in);
   prog_in = NULL;
 
   if (in_len <= threshold) close(write_to_file(out_file, in_data, in_len));
 
-  OKF("We're done here. Have a nice day!\n");
+  if (!quiet_mode) OKF("We're done here. Have a nice day!\n");
 
   exit(0);
 

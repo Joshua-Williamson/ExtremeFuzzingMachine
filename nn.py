@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from ntpath import join
 import os
 import sys
 import glob
@@ -30,9 +29,6 @@ round_cnt = 0
 seed = 12
 np.random.seed(seed)
 random.seed(seed)
-seed_list = glob.glob('./seeds/*')
-new_seeds = glob.glob('./seeds/id_*')
-SPLIT_RATIO = len(seed_list)
 # get binary argv
 argvv = sys.argv[1:]
 
@@ -44,6 +40,8 @@ def process_data_parallel():
     global seed_list
     global nocov_list
     global new_seeds
+    global len_seed_list
+    global len_nocov_list
     global label
 
     call = subprocess.check_output
@@ -53,6 +51,7 @@ def process_data_parallel():
     old_nocov_list=nocov_list
     seed_list=glob.glob('./seeds/*')
     nocov_list=glob.glob('./nocov/*')
+    len_seed_list,len_nocov_list = len(seed_list),len(nocov_list)
     to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
     SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
@@ -110,6 +109,43 @@ def process_data_parallel():
         file_name = "./bitmaps/" + i.split('/')[-1]
         np.save(file_name, bitmaps[idx])
 
+def reduce_variable_files():
+    vari_seed_list = glob.glob('./vari_seeds/*')
+    havoc_seed_list = glob.glob('./havoc_seeds/*')
+    minimise_seed_list = vari_seed_list + havoc_seed_list
+
+    call = subprocess.check_output
+
+    warning=False
+    for f in minimise_seed_list:
+        outfile = "./seeds/"+f.split('/')[-1]+'min'
+        try:
+            out = call(['timeout','30s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile ,'/dev/stdout', '-m', '1024', '-t', '1000','-l',MAX_FILE_SIZE] + args.target)
+        except subprocess.CalledProcessError as e:
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : t-min returns non-zero exit status for seed: {0}'.format(f)) 
+
+def cull_nocov():
+    global nocov_list
+    global len_nocov_list
+    global SPLIT_RATIO
+
+    cull_number=(len_nocov_list+len_seed_list)-args.memory_threshold
+    if cull_number > 0:
+        try:
+            deletes=np.random.choice(nocov_list,cull_number,replace=False)
+        except:
+            deletes=[]
+        for file in deletes:
+            os.remove(file)
+    
+    nocov_list=glob.glob('./nocov/*')
+    len_nocov_list=len(nocov_list)
+    SPLIT_RATIO=len(seed_list)+len(nocov_list)
+
+
 # process training data from afl raw data
 def process_data_init():
     #Max seed input file size allowed
@@ -147,7 +183,7 @@ def process_data_init():
 
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
-    os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
+    os.path.isdir("./havoc_seeds/") or os.makedirs("./havoc_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
     os.path.isdir("./nocov/") or os.makedirs("./nocov")
@@ -238,6 +274,7 @@ def train_generate(batch_size):
     global seed_list
     global nocov_list
     np.random.shuffle(seed_list)
+    np.random.shuffle(nocov_list)
     # load a batch of training data
     for i in range(0, SPLIT_RATIO, batch_size):
         # load full batch if batchsize is greater than the seeds availible
@@ -266,49 +303,6 @@ def vectorize_file(fl):
     seed.requires_grad=True
     return seed
 
-
-# Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
-# splice two seeds to a new seed
-def splice_seed(fl1, fl2, idxx):
-    tmp1 = open(fl1, 'rb').read()
-    ret = 1
-    randd = fl2
-    while ret == 1:
-        tmp2 = open(randd, 'rb').read()
-        if len(tmp1) >= len(tmp2):
-            lenn = len(tmp2)
-            head = tmp2
-            tail = tmp1
-        else:
-            lenn = len(tmp1)
-            head = tmp1
-            tail = tmp2
-        f_diff = 0
-        l_diff = 0
-
-        #lenn is the longest seed 
-        for i in range(lenn):
-            if tmp1[i] != tmp2[i]:
-                f_diff = i
-                break
-        for i in reversed(range(lenn)):
-            if tmp1[i] != tmp2[i]:
-                l_diff = i
-                break
-
-        #Is this because the shorter inputs are null byte padded on the right ?
-        if f_diff >= 0 and l_diff > 0 and (l_diff - f_diff) >= 2:
-            splice_at = f_diff + random.randint(1, l_diff - f_diff - 1)
-            head = list(head)
-            tail = list(tail)
-            tail[:splice_at] = head[:splice_at]
-            with open('./splice_seeds/tmp_' + str(idxx), 'wb') as f:
-                f.write(bytearray(tail))
-            ret = 0
-        print("Splice_info:",f_diff, l_diff)
-        randd = random.choice(seed_list)
-
-
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
 def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
@@ -325,28 +319,7 @@ def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
         idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
         val = np.sign(grads_value[0][idx])
         adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        if round_cnt % 2 == 0:
-            splice_seed(fl[0], fl[1], idxx)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-        else:
-            splice_seed(fl[0], fl[1], idxx + edge_num)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + edge_num))
-            K=optimizer.RBF_Kernel(x,optimizer.data)
-            out=torch.mm(K,optimizer.Net)[:,f]
-            grads_value = torch.autograd.grad(out,x)[0].numpy()
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + edge_num)))
-
+        
     return adv_list
 
 
@@ -366,18 +339,6 @@ def gen_adv3(f, fl, optimizer, idxx, splice, edge_num):
         #val = np.sign(grads_value[0][idx])
         val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
         adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        splice_seed(fl[0], fl[1], idxx)
-        x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        # val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
 
     return adv_list
 
@@ -428,9 +389,9 @@ def gen_mutate2(optimizer, edge_num, sign):
 
 def build_model():
 
-    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0)
+    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0,is_cuda=args.enable_cuda)
     if args.enable_cuda:
-        optimizer.cuda()#<-Will this work?
+        optimizer.to(device)#<-Will this work?
 
     return optimizer
 
@@ -496,12 +457,16 @@ def setup_server():
             if data[0:3] == b"MAP":
                 print("Remapping")
                 t0=time.time()
+                reduce_variable_files()
                 process_data_parallel()
+                cull_nocov()
                 print("Remapped in: " + str(time.time()-t0) + " seconds")
             else:
                 print("Retraining")
                 t0=time.time()
+                reduce_variable_files()
                 process_data_parallel()
+                cull_nocov()
                 print("Remapped in: " + str(time.time()-t0) + " seconds")
                 gen_grad(data)
                 conn.sendall(b"start")
@@ -525,8 +490,19 @@ if __name__ == '__main__':
                         default=False,
                         action='store_true')
 
+    parser.add_argument('-n',
+                        '--memory-threshold',
+                        help='Maximum amount of nocov seeds allowed',
+                        type=int,
+                        default=20000)
+
+
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args
+    global device
     args = parser.parse_args()
+    if args.enable_cuda:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("Using Device: " + str(device))
     #Start program and spin up server
     setup_server()
