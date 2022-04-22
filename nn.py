@@ -63,12 +63,6 @@ def process_data():
     max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
-    #Removes files over threshold
-    while round_cnt == 0 and MAX_FILE_SIZE > MAX_MAX_FILE_SIZE:
-        os.remove(cwd + '/seeds/' + max_file_name)
-        max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
-        MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
-
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
     os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
