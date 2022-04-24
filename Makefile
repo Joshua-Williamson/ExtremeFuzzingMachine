@@ -3,7 +3,6 @@ LDFLAGS_TMIN = -ldl
 
 compile:
 	gcc -O3 -funroll-loops ./neuzz.c -o neuzz
-	gcc $(CFLAGS_TMIN) afl-tmin.c -o afl-tmin $(LDFLAGS)
 debug:
 	gcc -g -O3 -funroll-loops ./neuzz.c -o neuzz_dbg
 
