@@ -1995,6 +1995,7 @@ void fuzz_lop(char *grad_file, int sock) {
   fclose(stream);
   send(sock, "train", 5, 0);
   printf("Train Signal\n");
+  round_cnt++;
 }
 
 /* connect to python NN module, then read the gradient file to guide fuzzing */
