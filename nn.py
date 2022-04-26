@@ -145,7 +145,7 @@ def cull_nocov():
         for file in deletes:
             os.remove(file)
     
-        nocov_list=glob.glob('./nocov/*')
+        nocov_list=[x for x in nocov_list if x not in deletes]
         len_nocov_list=len(nocov_list)
         SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
