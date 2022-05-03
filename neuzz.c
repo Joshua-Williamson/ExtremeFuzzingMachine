@@ -157,6 +157,10 @@ static int cpu_aff = -1;                /* Selected CPU core */
 int round_cnt = 0;                      /* Round number counter */
 int edge_gain = 0;                      /* If there is new edge gain */
 int exec_tmout = 1000;                  /* Exec timeout (ms)                 */
+int unique_crashes = 0;                 /* Amount of unique crashes found */
+int total_crashes = 0;                  /* Total crashes found */
+int unique_tmout = 0;                 /* Amount of unique tmout found */
+int total_tmout = 0;                  /* Total tmout found */
 
 int old = 0;
 int now = 0;
@@ -180,6 +184,9 @@ char *in_dir,                           /* Input directory with test cases  */
      *out_file,                         /* File to fuzz, if any             */
      *out_dir;                          /* Working & output directory       */
 char virgin_bits[MAP_SIZE];             /* Regions yet untouched by fuzzing */
+char crash_bits[MAP_SIZE];             /* Regions yet untouched by crashing*/
+char tmout_bits[MAP_SIZE];             /* Regions yet untouched by tmouting*/
+
 static int mut_cnt = 0;                 /* Total mutation counter           */
 static int havoc_cnt = 0;               /* Total mutation counter by havoc  */
 char *out_buf, *out_buf1, *out_buf2, *out_buf3;
@@ -593,6 +600,8 @@ void setup_shm(void) {
   char* shm_str;
 
   memset(virgin_bits, 255, MAP_SIZE);
+  memset(crash_bits, 255, MAP_SIZE);
+  memset(tmout_bits, 255, MAP_SIZE);
 
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
@@ -1393,12 +1402,29 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
   write_to_testcase(out_buf, length);
   int fault = run_target(exec_tmout);
   if (fault != 0 && fault == FAULT_CRASH) {
-    char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
-    int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    ck_write(mut_fd, out_buf, length, mut_fn);
-    free(mut_fn);
-    close(mut_fd);
+    if (has_new_bits(crash_bits)){
+      char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
+      int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+      ck_write(mut_fd, out_buf, length, mut_fn);
+      free(mut_fn);
+      close(mut_fd);
+      unique_crashes++;
+    }
+    else total_crashes++;
   }
+
+  if (fault != 0 && fault == FAULT_TMOUT) {
+    if (has_new_bits(tmout_bits)){
+      char *mut_fn = alloc_printf("%s/hangs_%d_%06d", "./hangs", round_cnt, mut_cnt++);
+      int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+      ck_write(mut_fd, out_buf, length, mut_fn);
+      free(mut_fn);
+      close(mut_fd);
+      unique_tmout++;
+    }
+    else total_tmout++;
+  }
+
   /* save mutations that find new edges. */
   int ret = has_new_bits(virgin_bits);
   if (ret == 2) {
@@ -1431,12 +1457,29 @@ void execute_target_program_vari(char* out_buf, size_t length, char* out_dir) {
   write_to_testcase(out_buf, length);
   int fault = run_target(exec_tmout);
   if (fault != 0 && fault == FAULT_CRASH) {
-    char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
-    int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    ck_write(mut_fd, out_buf, length, mut_fn);
-    free(mut_fn);
-    close(mut_fd);
+    if (has_new_bits(crash_bits)){
+      char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
+      int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+      ck_write(mut_fd, out_buf, length, mut_fn);
+      free(mut_fn);
+      close(mut_fd);
+      unique_crashes++;
+    }
+    else total_crashes++;
   }
+
+  if (fault != 0 && fault == FAULT_TMOUT) {
+    if (has_new_bits(tmout_bits)){
+      char *mut_fn = alloc_printf("%s/hangs_%d_%06d", "./hangs", round_cnt, mut_cnt++);
+      int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+      ck_write(mut_fd, out_buf, length, mut_fn);
+      free(mut_fn);
+      close(mut_fd);
+      unique_tmout++;
+    }
+    else total_tmout++;
+  }
+
   /* save mutations that find new edges. */
   int ret = has_new_bits(virgin_bits);
   if (ret == 2) {
@@ -1752,11 +1795,26 @@ void afl_havoc_stage(struct queue_entry* q) {
 
     if (fault != 0) {
       if(fault == FAULT_CRASH) {
-        char* mut_fn = alloc_printf("%s/crash_%d_%06d_havoc", "./crashes", round_cnt, havoc_cnt++);
-        int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
-        ck_write(mut_fd, havoc_out_buf, len, mut_fn);
-        close(mut_fd);
-        free(mut_fn);
+        if (has_new_bits(crash_bits)){
+          char *mut_fn = alloc_printf("%s/crash_%d_%06d_havoc", "./crashes", round_cnt, havoc_cnt++);
+          int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+          ck_write(mut_fd, havoc_out_buf, len, mut_fn);
+          free(mut_fn);
+          close(mut_fd);
+          unique_crashes++;
+        }
+        else total_crashes++;
+      }
+      if(fault == FAULT_TMOUT) {
+        if (has_new_bits(tmout_bits)){
+          char *mut_fn = alloc_printf("%s/hangs_%d_%06d_havoc", "./hangs", round_cnt, havoc_cnt++);
+          int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+          ck_write(mut_fd, havoc_out_buf, len, mut_fn);
+          free(mut_fn);
+          close(mut_fd);
+          unique_tmout++;
+        }
+      else total_tmout++;
       }
     }
 
@@ -1817,11 +1875,27 @@ void dry_run(char *dir) {
         int fault = run_target(exec_tmout);
         int ret = has_new_bits(virgin_bits);
         if (fault != 0 && fault == FAULT_CRASH) {
-          char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
-          int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
-          ck_write(mut_fd, out_buf1, file_len, mut_fn);
-          free(mut_fn);
-          close(mut_fd);
+          if (has_new_bits(crash_bits)){
+            char *mut_fn = alloc_printf("%s/crash_%d_%06d", "./crashes", round_cnt, mut_cnt++);
+            int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+            ck_write(mut_fd, out_buf1, file_len, mut_fn);
+            free(mut_fn);
+            close(mut_fd);
+            unique_crashes++;
+          }
+          else total_crashes++;
+        }
+
+        if (fault != 0 && fault == FAULT_TMOUT) {
+          if (has_new_bits(tmout_bits)){
+            char *mut_fn = alloc_printf("%s/hangs_%d_%06d", "./hangs", round_cnt, mut_cnt++);
+            int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
+            ck_write(mut_fd, out_buf1, file_len, mut_fn);
+            free(mut_fn);
+            close(mut_fd);
+            unique_tmout++;
+          }
+          else total_tmout++;
         }
 
         stop_us = get_cur_time_us();
@@ -1938,7 +2012,7 @@ void fuzz_lop(char *grad_file, int sock) {
       write_nocov = count_seeds("nocov","+nocov") < nocov_seeds_threshold*(1+round_cnt);
       if(line_cnt ==1) write_nocov =0;
       nocov_statistic = 1000000*(nocov_seeds_threshold/(200*execs_per_line));
-      log("fuzzing state: line_cnt %d and edge num %d\n", line_cnt, count_non_255_bytes(virgin_bits));
+      log("fuzzing state: line_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d\n", line_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
       fflush(stdout);
     }
 

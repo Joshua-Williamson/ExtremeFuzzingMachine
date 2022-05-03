@@ -184,6 +184,7 @@ def process_data_init():
     os.path.isdir("./havoc_seeds/") or os.makedirs("./havoc_seeds")
     os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
     os.path.isdir("./crashes/") or os.makedirs("./crashes")
+    os.path.isdir("./hangs/") or os.makedirs("./hangs")
     os.path.isdir("./nocov/") or os.makedirs("./nocov")
     nocov_list=glob.glob('./nocov/*')
 
