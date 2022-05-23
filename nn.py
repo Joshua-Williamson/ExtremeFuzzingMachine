@@ -422,6 +422,7 @@ def select_edges(edge_num):
     if np.random.rand() < 0.1:
         # random selection mechanism
         alter_edges = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+        alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
     else:
         candidate_set = set()
         for edge in label:
@@ -429,26 +430,26 @@ def select_edges(edge_num):
                 candidate_set.add(list(label).index(edge))
         replace_flag = True if len(candidate_set) < edge_num else False
         alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
+        alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
 
+        for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+            seed=seed_list[seed_indx]
+            seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
+            seed_inds=np.where(seed_bits==1)[0]
+            if not interest_ind in list(seed_inds):
+                candidates=list(candidate_set.intersection(seed_inds))    
+                if candidates:
+                    alter_edges[i]=np.random.choice(candidates)
+                else:
+                    alter_edges=np.delete(alter_edges,i)
+                    alter_seeds=np.delete(alter_seeds,i)
     # random seed list
-    alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
     #TODO:
     #Adding table so that seeds and indices arent repeated
     #Add additional check here to see if edge is in the path of seed file 
     #Also focus on opitmising the gradient stuff and I think that will be everything
     #Is nocov wasting time on seeds that will never get passed? 
 
-    for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
-        seed=seed_list[seed_indx]
-        seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
-        seed_inds=np.where(seed_bits==1)[0]
-        if not interest_ind in list(seed_inds):
-            candidates=list(candidate_set.intersection(seed_inds))    
-            if candidates:
-                alter_edges[i]=np.random.choice(candidates)
-            else:
-                alter_edges=np.delete(alter_edges,i)
-                alter_seeds=np.delete(alter_seeds,i)
 
     interested_indice = zip(alter_edges.tolist(), alter_seeds)
     return interested_indice

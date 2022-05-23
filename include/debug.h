@@ -189,7 +189,7 @@
 #define log(...)                                            \
   do {                                                      \
     sprintf(log_msg_buf, __VA_ARGS__);                      \
-    fprintf("%s", log_msg_buf);                              \
+    fprintf(stderr,"%s", log_msg_buf);                             \
     time_t rawtime = time(NULL);                            \
     char strTime[100];                                      \
     strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \

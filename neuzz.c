@@ -72,7 +72,7 @@ int havoc_blk_large = 8192;
     u32 _len = (len);                                      \
     int _res = write(fd, buf, _len);                       \
     if (_res != _len)                                      \
-      fprintf(stderr, "Short write to %d %s\n", _res, fn); \
+      WARNF("Short write to %d %s", _res, fn); \
   } while (0)
 
 #define ck_read(fd, buf, len, fn)                           \
@@ -80,7 +80,7 @@ int havoc_blk_large = 8192;
     u32 _len = (len);                                       \
     int _res = read(fd, buf, _len);                         \
     if (_res != _len)                                       \
-      fprintf(stderr, "Short read from %d %s\n", _res, fn); \
+      WARNF("Short read from %d %s", _res, fn); \
   } while (0)
 
 /* User-facing macro to sprintf() to a dynamically allocated buffer. */
@@ -88,7 +88,7 @@ int havoc_blk_large = 8192;
   char *_tmp;                             \
   int _len = snprintf(NULL, 0, _str);     \
   if (_len < 0)                           \
-    perror("Whoa, snprintf() fails?!");   \
+    WARNF("Whoa, snprintf() fails?!");   \
   _tmp = malloc(_len + 1);                \
   snprintf((char *)_tmp, _len + 1, _str); \
   _tmp;                                   \
@@ -112,22 +112,6 @@ int havoc_blk_large = 8192;
           ((_ret << 8) & 0x00FF0000) |  \
           ((_ret >> 8) & 0x0000FF00));  \
   })
-
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    printf("%s", log_msg_buf);                              \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -230,7 +214,7 @@ void setup_stdio_file(void) {
 
   out_fd = open(fn, O_RDWR | O_CREAT | O_EXCL, 0600);
 
-  if (out_fd < 0) perror("Unable to create .cur_input");
+  if (out_fd < 0) WARNF("Unable to create .cur_input");
 
   free(fn);
 
@@ -295,7 +279,7 @@ static void handle_stop_sig(int sig) {
 
   if (child_pid > 0) kill(child_pid, SIGKILL);
   if (forksrv_pid > 0) kill(forksrv_pid, SIGKILL);
-  printf("total execs %ld edge coverage %d.\n", total_execs,(int)(count_non_255_bytes(virgin_bits)));
+  OKF("total execs %ld edge coverage %d.", total_execs,(int)(count_non_255_bytes(virgin_bits)));
 
   free(out_buf);
   free(out_buf1);
@@ -439,13 +423,13 @@ void init_forkserver(char** argv) {
   int rlen;
   char* cwd = getcwd(NULL, 0);
   out_file = alloc_printf("%s/%s/.cur_input",cwd, out_dir);
-  log("Spinning up the fork server...\n");
+  OKF("Spinning up the fork server...");
 
-  if (pipe(st_pipe) || pipe(ctl_pipe)) perror("pipe() failed");
+  if (pipe(st_pipe) || pipe(ctl_pipe)) WARNF("pipe() failed");
 
   forksrv_pid = fork();
 
-  if (forksrv_pid < 0) perror("fork() failed");
+  if (forksrv_pid < 0) WARNF("fork() failed");
 
   if (!forksrv_pid) {
 
@@ -510,8 +494,8 @@ void init_forkserver(char** argv) {
 
     /* Set up control and status pipes, close the unneeded original fds. */
 
-    if (dup2(ctl_pipe[0], FORKSRV_FD) < 0) perror("dup2() failed");
-    if (dup2(st_pipe[1], FORKSRV_FD + 1) < 0) perror("dup2() failed");
+    if (dup2(ctl_pipe[0], FORKSRV_FD) < 0) WARNF("dup2() failed");
+    if (dup2(st_pipe[1], FORKSRV_FD + 1) < 0) WARNF("dup2() failed");
 
     close(ctl_pipe[0]);
     close(ctl_pipe[1]);
@@ -563,26 +547,26 @@ void init_forkserver(char** argv) {
      Otherwise, try to figure out what went wrong. */
 
   if (rlen == 4) {
-    printf("All right - fork server is up.");
+    OKF("All right - fork server is up.");
     return;
   }
 
   if (child_timed_out)
-    perror("Timeout while initializing fork server (adjusting -t may help)");
+    WARNF("Timeout while initializing fork server (adjusting -t may help)");
 
   if (waitpid(forksrv_pid, &status, 0) <= 0)
-    perror("waitpid() failed");
+    WARNF("waitpid() failed");
 
   if (WIFSIGNALED(status)) {
 
-    fprintf(stderr, "Fork server crashed with signal %d", WTERMSIG(status));
+    WARNF("Fork server crashed with signal %d", WTERMSIG(status));
 
   }
 
   if (*(int*)trace_bits == EXEC_FAIL_SIG)
-    fprintf(stderr, "Unable to execute target application ('%s')", argv[0]);
+    WARNF("Unable to execute target application ('%s')", argv[0]);
 
-  perror("Fork server handshake failed");
+  WARNF("Fork server handshake failed");
   
 }
 
@@ -606,7 +590,7 @@ void setup_shm(void) {
 
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
-  if (shm_id < 0) perror("shmget() failed");
+  if (shm_id < 0) WARNF("shmget() failed");
 
   atexit(remove_shm);
 
@@ -623,7 +607,7 @@ void setup_shm(void) {
 
   trace_bits = shmat(shm_id, NULL, 0);
 
-  if (!trace_bits) perror("shmat() failed");
+  if (!trace_bits) WARNF("shmat() failed");
 
 }
 
@@ -632,22 +616,22 @@ void setup_dirs_fds(void) {
   char* tmp;
   int fd;
 
-  log("Setting up output directories...\n");
+  ACTF("Setting up output directories...");
 
 
   if (mkdir(out_dir, 0700)) {
 
-    if (errno != EEXIST) fprintf(stderr,"Unable to create %s\n", out_dir);
+    if (errno != EEXIST) WARNF("Unable to create %s", out_dir);
 
   }
 
   /* Generally useful file descriptors. */
 
   dev_null_fd = open("/dev/null", O_RDWR);
-  if (dev_null_fd < 0) perror("Unable to open /dev/null");
+  if (dev_null_fd < 0) WARNF("Unable to open /dev/null");
 
   dev_urandom_fd = open("/dev/urandom", O_RDONLY);
-  if (dev_urandom_fd < 0) perror("Unable to open /dev/urandom");
+  if (dev_urandom_fd < 0) WARNF("Unable to open /dev/urandom");
 
 }
 
@@ -661,11 +645,11 @@ static void check_crash_handling(void) {
 
   if (fd < 0) return;
 
-  printf("Checking core_pattern...");
+  ACTF("Checking core_pattern...");
 
   if (read(fd, &fchar, 1) == 1 && fchar == '|') {
 
-    printf("\n \n" "\033[31m"
+    WARNF("\n \n" cRST 
          "Hmm, your system is configured to send core dump notifications to an\n"
          "    external utility. This will cause issues: there will be an extended delay\n"
          "    between stumbling upon a crash and having this information relayed to the\n"
@@ -689,7 +673,7 @@ void detect_file_args(char** argv) {
   int i = 0;
   char* cwd = getcwd(NULL, 0);
 
-  if (!cwd) perror("getcwd() failed");
+  if (!cwd) WARNF("getcwd() failed");
 
   while (argv[i]) {
 
@@ -925,20 +909,20 @@ static void get_core_count(void) {
 
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
 
-    printf("You have %u CPU core%s and %u runnable tasks (utilization: %0.0f%%).\n",
+    ACTF("You have %u CPU core%s and %u runnable tasks (utilization: %0.0f%%).",
         cpu_core_count, cpu_core_count > 1 ? "s" : "",
         cur_runnable, cur_runnable * 100.0 / cpu_core_count);
 
     if (cpu_core_count > 1) {
 
       if (cur_runnable > cpu_core_count * 1.5) {
-        printf("System under apparent load, performance may be spotty.\n");
+        WARNF("System under apparent load, performance may be spotty.");
       }
     }
 
   } else {
     cpu_core_count = 0;
-    printf("Unable to figure out the number of CPU cores.\n");
+    WARNF("Unable to figure out the number of CPU cores.");
   }
 
 }
@@ -957,18 +941,18 @@ static void bind_to_free_cpu(void) {
   if (cpu_core_count < 2) return;
 
   if (getenv("AFL_NO_AFFINITY")) {
-    perror("Not binding to a CPU core (AFL_NO_AFFINITY set).");
+    WARNF("Not binding to a CPU core (AFL_NO_AFFINITY set).");
     return;
   }
 
   d = opendir("/proc");
 
   if (!d) {
-    perror("Unable to access /proc - can't scan for free CPU cores.");
+    WARNF("Unable to access /proc - can't scan for free CPU cores.");
     return;
   }
 
-  log("Checking CPU core loadout...\n");
+  ACTF("Checking CPU core loadout...");
 
   /* Introduce some jitter, in case multiple AFL tasks are doing the same
      thing at the same time... */
@@ -1026,10 +1010,10 @@ static void bind_to_free_cpu(void) {
   for (i = 0; i < cpu_core_count; i++) if (!cpu_used[i]) break;
 
   if (i == cpu_core_count) {
-    printf("No more free CPU cores\n");
+    WARNF("No more free CPU cores");
   }
 
-  printf("Found a free CPU core, binding to #%u.\n", i);
+  ACTF("Found a free CPU core, binding to #%u.", i);
 
   cpu_aff = i;
 
@@ -1037,7 +1021,7 @@ static void bind_to_free_cpu(void) {
   CPU_SET(i, &c);
 
   if (sched_setaffinity(0, sizeof(c), &c))
-    perror("sched_setaffinity failed\n");
+    WARNF("sched_setaffinity failed");
 
 }
 
@@ -1082,17 +1066,17 @@ static u8 run_target(int timeout) {
     if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
 
       if (stop_soon) return 0;
-      fprintf(stderr,"err%d: Unable to request new process from fork server (OOM?)", res);
+      WARNF("err%d: Unable to request new process from fork server (OOM?)", res);
 
     }
 
     if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
 
       if (stop_soon) return 0;
-      fprintf(stderr, "err%d: Unable to request new process from fork server (OOM?)",res);
+      WARNF("err%d: Unable to request new process from fork server (OOM?)",res);
 
     }
-    if (child_pid <= 0) perror("Fork server is misbehaving (OOM?)");
+    if (child_pid <= 0) WARNF("Fork server is misbehaving (OOM?)");
 
 
   /* Configure timeout, as requested by user, then wait for child to terminate. */
@@ -1105,7 +1089,7 @@ static u8 run_target(int timeout) {
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
     if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
       if (stop_soon) return 0;
-      fprintf(stderr, "err%d: Unable to communicate with fork server (OOM?)",res);
+      WARNF("err%d: Unable to communicate with fork server (OOM?)",res);
     }
 
 
@@ -1159,7 +1143,7 @@ static void write_to_testcase(void* mem, u32 len) {
     unlink(out_file); /* Ignore errors. */
 
     fd = open(out_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (fd < 0) perror("Unable to create file");
+    if (fd < 0) WARNF("Unable to create file");
 
   ck_write(fd, mem, len, out_file);
 
@@ -1176,7 +1160,7 @@ int count_seeds(char * in_dir, char * filter_str){
     dirp = opendir(in_dir);
     
     if (!dirp) {
-      perror("Cannot open directory");
+      WARNF("Cannot open directory");
       return;
     }
 
@@ -1202,9 +1186,9 @@ static void check_cpu_governor(void) {
   f = fopen("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", "r");
   if (!f) return;
 
-  printf("Checking CPU scaling governor...\n");
+  ACTF("Checking CPU scaling governor...");
 
-  if (!fgets(tmp, 128, f)) perror("fgets() failed");
+  if (!fgets(tmp, 128, f)) WARNF("fgets() failed");
 
   fclose(f);
 
@@ -1226,7 +1210,7 @@ static void check_cpu_governor(void) {
 
   if (min == max) return;
 
-  printf("Err: Suboptimal CPU scaling governor\n");
+  ACTF("Err: Suboptimal CPU scaling governor");
 
 }
 
@@ -1845,11 +1829,11 @@ void dry_run(char *dir) {
   struct stat statbuf;
   file_container = create_file_container();
   if ((dp = opendir(dir)) == NULL) {
-    fprintf(stderr, "cannot open directory: %s\n", dir);
+    WARNF("cannot open directory: %s", dir);
     return;
   }
   if (chdir(dir) == -1)
-    perror("chdir failed\n");
+    WARNF("chdir failed");
   int cnt = 0;
   u64 start_us, stop_us;
   while ((entry = readdir(dp)) != NULL) {
@@ -1865,7 +1849,7 @@ void dry_run(char *dir) {
 
         int fd_tmp = open(entry->d_name, O_RDONLY);
         if (fd_tmp == -1)
-          perror("open failed");
+          WARNF("open failed");
         int file_len = statbuf.st_size;
         memset(out_buf1, 0, len);
         ck_read(fd_tmp, out_buf1, file_len, entry->d_name);
@@ -1907,7 +1891,7 @@ void dry_run(char *dir) {
     }
   }
   if (chdir("..") == -1)
-    perror("chdir failed\n");
+    WARNF("chdir failed");
   closedir(dp);
 
   /* estimate the average exec time at the beginning*/
@@ -1921,11 +1905,11 @@ void dry_run(char *dir) {
 
   exec_tmout = (exec_tmout + 20) / 20 * 20;
   exec_tmout = exec_tmout;
-  log("avg %d time out %d cnt %d sum %lld \n.", (int)avg_us, exec_tmout, cnt, total_cal_us);
+  OKF("avg %d time out %d cnt %d sum %lld .", (int)avg_us, exec_tmout, cnt, total_cal_us);
   
   container_to_queue();
   free_file_container(file_container);
-  log("dry run %ld edge coverage %d.\n", total_execs, count_non_255_bytes(virgin_bits));
+  OKF("dry run %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;
 }
 
@@ -1934,13 +1918,13 @@ void copy_file(char *src, char *dst) {
   int c;
   fptr1 = fopen(src, "r");
   if (fptr1 == NULL) {
-    printf("Cannot open file %s \n", src);
+    WARNF("Cannot open file %s ", src);
     exit(0);
   }
 
   fptr2 = fopen(dst, "w");
   if (fptr2 == NULL) {
-    printf("Cannot open file %s \n", dst);
+    WARNF("Cannot open file %s ", dst);
     exit(0);
   }
 
@@ -1960,7 +1944,7 @@ void copy_seeds(char *in_dir, char *out_dir) {
   struct dirent *de;
   DIR *dp;
   if ((dp = opendir(in_dir)) == NULL) {
-    fprintf(stderr, "cannot open directory: %s\n", in_dir);
+    WARNF("cannot open directory: %s", in_dir);
     return;
   }
   char src[512], dst[512];
@@ -1982,12 +1966,12 @@ void fuzz_lop(char *grad_file, int sock) {
   size_t llen = 0;
   ssize_t nread;
   if (stream == NULL) {
-    perror("fopen");
+    WARNF("fopen");
     exit(EXIT_FAILURE);
   }
 
   time_t tt1 = time(NULL);
-  log("currect cnt: %d, gen_mutate start\n", queue_cycle);
+  OKF("currect cnt: %d, gen_mutate start", queue_cycle);
   
   /* parse the gradient to guide fuzzing */
   int line_cnt = 0;
@@ -2013,20 +1997,20 @@ void fuzz_lop(char *grad_file, int sock) {
       write_nocov = count_seeds("nocov","+nocov") < nocov_seeds_threshold*(1+round_cnt);
       if(line_cnt ==1) write_nocov =0;
       nocov_statistic = 1000000*(nocov_seeds_threshold/(200*execs_per_line));
-      log("fuzzing state: line_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d\n", line_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
+      OKF("fuzzing state: line_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d", line_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
       fflush(stdout);
     }
 
     /*Send remap signal*/
     if ((line_cnt % remap_interval) == 0){
-        printf("Remap Signal \n");
+        OKF("Remap Signal ");
         send(sock,"MAP", 5,0);
     }
 
     /* read seed into mem */
     int fn_fd = open(fn, O_RDONLY);
     if (fn_fd == -1) {
-      perror("open failed");
+      WARNF("open failed");
       exit(0);
     }
     struct stat st;
@@ -2044,8 +2028,8 @@ void fuzz_lop(char *grad_file, int sock) {
   }
 
   time_t tt2 = time(NULL);
-  log("current cnt: %d, gen_mutate finished, starting havoc stage\n", queue_cycle);
-  log("gen_mutate use time %fs\n", difftime(tt2, tt1));
+  OKF("current cnt: %d, gen_mutate finished, starting havoc stage", queue_cycle);
+  OKF("gen_mutate use time %fs", difftime(tt2, tt1));
 
   /* afl havoc stage */
   struct queue_entry* q_entry = queue_havoc->head->next;
@@ -2058,18 +2042,18 @@ void fuzz_lop(char *grad_file, int sock) {
     q_entry = q_entry->next;
 
     if ((queue_cnt++ % 50) == 0) {
-      printf("rate of havoc stage: %.2lf%%\r", queue_cnt * 100.0 / queue_size);
+      ACTF("rate of havoc stage: %.2lf%%\r", queue_cnt * 100.0 / queue_size);
       fflush(stdout);
     }
   }
 
   time_t tt3 = time(NULL);
-  log("current cnt: %d, havoc finished\n", queue_cycle);
-  log("havoc use time %fs\n", difftime(tt3, tt2));
+  OKF("current cnt: %d, havoc finished", queue_cycle);
+  OKF("havoc use time %fs", difftime(tt3, tt2));
   free(line);
   fclose(stream);
   send(sock, "train", 5, 0);
-  printf("Train Signal\n");
+  OKF("Train Signal");
   round_cnt++;
 }
 
@@ -2080,38 +2064,38 @@ void start_fuzz(int f_len) {
   int sock = 0;
   struct sockaddr_in serv_addr;
   if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    perror("Socket creation error");
+    WARNF("Socket creation error");
     exit(0);
   }
   memset(&serv_addr, '0', sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_port = htons(PORT);
   if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-    perror("Invalid address/ Address not supported");
+    WARNF("Invalid address/ Address not supported");
     exit(0);
   }
   if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    perror("Connection Failed");
+    WARNF("Connection Failed");
     exit(0);
   }
 
-  log("start of the fuzzing module\n");
+  ACTF("start of the fuzzing module");
   /* set up buffer */
   out_buf = malloc(10000);
   if (!out_buf)
-    perror("malloc failed");
+    WARNF("malloc failed");
   out_buf1 = malloc(10000);
   if (!out_buf1)
-    perror("malloc failed");
+    WARNF("malloc failed");
   out_buf2 = malloc(10000);
   if (!out_buf2)
-    perror("malloc failed");
+    WARNF("malloc failed");
   out_buf3 = malloc(20000);
   if (!out_buf3)
-    perror("malloc failed");
+    WARNF("malloc failed");
   
   queue_havoc = create_queue();
-  if (!queue_havoc) perror("init queue failed");
+  if (!queue_havoc) WARNF("init queue failed");
   
   len = f_len;
   /* dry run initial seeds*/
@@ -2122,9 +2106,9 @@ void start_fuzz(int f_len) {
   char buf[16];
   while (1) {
     if (read(sock, buf, 5) == -1)
-      perror("received failed\n");
+      WARNF("received failed");
     fuzz_lop("gradient_info", sock);
-    log("%dth iteration, receive\n", ++queue_cycle);
+    ACTF("%dth iteration, receive", ++queue_cycle);
   }
   return;
 }
@@ -2142,12 +2126,12 @@ void main(int argc, char *argv[]) {
 
     switch (opt) {
     case 'i': /* input dir */
-      if (in_dir) perror("Multiple -i options not supported");
+      if (in_dir) WARNF("Multiple -i options not supported");
       in_dir = optarg;
       break;
 
     case 'o': /* output dir */
-      if (out_dir) perror("Multiple -o options not supported");
+      if (out_dir) WARNF("Multiple -o options not supported");
       out_dir = optarg;
       break;
 
@@ -2165,8 +2149,8 @@ void main(int argc, char *argv[]) {
         havoc_blk_medium = 2048;
         havoc_blk_small = 1024;
       }
-      printf("num_index %d %d small %d medium %d large %d\n", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
-      printf("mutation len: %ld\n", len);
+      OKF("num_index %d %d small %d medium %d large %d", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
+      OKF("mutation len: %ld", len);
       break;
       
       case 'm': /* memory limit: use -m none option for ASAN */
@@ -2177,7 +2161,7 @@ void main(int argc, char *argv[]) {
 
           char suffix = 'M';
           if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 || optarg[0] == '-') {
-            fprintf(stderr, "Bad syntax used for -m\n");
+            WARNF("Bad syntax used for -m");
             return -1;
           }
 
@@ -2187,23 +2171,23 @@ void main(int argc, char *argv[]) {
             case 'k': mem_limit /= 1024; break;
             case 'M': break;
             default:
-              fprintf(stderr, "Unsupported suffix or bad syntax for -m\n");
+              WARNF("Unsupported suffix or bad syntax for -m");
               return -1;
           }
 
           if (mem_limit < 5) {
-            fprintf(stderr, "Dangerously low value of -m\n");
+            WARNF("Dangerously low value of -m");
             return -1;
           }
           if (sizeof(rlim_t) == 4 && mem_limit > 2000) {
-            fprintf(stderr, "Value of -m out of range on 32-bit systems\n");
+            WARNF("Value of -m out of range on 32-bit systems");
             return -1;
           }
           break;
       
 
     default:
-      printf("no manual...");
+      WARNF("no manual...");
     }
 
   setup_signal_handlers();
@@ -2222,6 +2206,6 @@ void main(int argc, char *argv[]) {
   srand(time(NULL));
 
   start_fuzz(len);
-  printf("total execs %ld edge coverage %d.\n", total_execs, count_non_255_bytes(virgin_bits));
+  OKF("total execs %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;
 }
