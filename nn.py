@@ -1,35 +1,29 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-#TO DO:
-#-Python 3.7-ify
-#-Add CLI/Config file for variables
 import argparse
 import os
 import sys
 import glob
 import math
 import time
-import keras
 import random
 import socket
 import subprocess
 import numpy as np
-import tensorflow as tf
-import keras.backend as K
 from collections import Counter
-from tensorflow import set_random_seed
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
-from keras.callbacks import ModelCheckpoint
+
+from pyparsing import lineEnd
+
+from utils.flow import FlowBuilder
+import torch
+from torch.autograd import Variable
+from utils.TorchELM import pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
 PORT = 12012
 
-#Max seed input file size allowed
-MAX_FILE_SIZE = 10000
-MAX_BITMAP_SIZE = 2000
 round_cnt = 0
 # Choose a seed for random initilzation
 # seed = int(time.time())
@@ -38,24 +32,154 @@ round_cnt = 0
 seed = 12
 np.random.seed(seed)
 random.seed(seed)
-set_random_seed(seed)
-seed_list = glob.glob('./seeds/*')
-new_seeds = glob.glob('./seeds/id_*')
-SPLIT_RATIO = len(seed_list)
 # get binary argv
 argvv = sys.argv[1:]
 
+def parse_executable():
+    global correspond_dict
 
-# process training data from afl raw data
-def process_data(data):
+    flow = FlowBuilder(args.target[0])
+    with open(flow.correspond_target, 'r') as fopen:
+        correspond_dict = eval(fopen.readline())
+
+def process_data_parallel():
+
     global MAX_BITMAP_SIZE
     global MAX_FILE_SIZE
     global SPLIT_RATIO
     global seed_list
+    global nocov_list
     global new_seeds
+    global len_seed_list
+    global len_nocov_list
+    global label
+
+    call = subprocess.check_output
+
+    new_seeds = glob.glob('./seeds/id_*')
+    old_seed_list=seed_list
+    old_nocov_list=nocov_list
+    seed_list=glob.glob('./seeds/*')
+    nocov_list=glob.glob('./nocov/*')
+    len_seed_list,len_nocov_list = len(seed_list),len(nocov_list)
+    to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
+    SPLIT_RATIO=len(seed_list)+len(nocov_list)
+
+    out = ''
+    warning = False
+    pad=0
+    bitmaps=np.empty([len(to_map_seed_list),MAX_BITMAP_SIZE])
+    for ind,f in enumerate(to_map_seed_list):
+        tmp_list = [] #Keeps list of ID's for each seed file inside loop
+        try:
+            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
+            mem_lim= '1024' if not args.enable_asan else 'none'
+            if argvv[0] == './strip':
+                raise NotImplementedError
+                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
+            else:
+                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+        except subprocess.CalledProcessError as e:
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+
+        for line in out.splitlines():
+            edge = line.split(b':')[0]
+            tmp_list.append(int(edge))
+        
+        tmp_list=np.array(tmp_list)
+        not_seen_already=np.invert(np.in1d(tmp_list,label))
+        pad+=sum(not_seen_already)
+        bitmaps=np.pad(bitmaps,[(0,0),(0,sum(not_seen_already))], mode='constant')
+        label=np.append(label,tmp_list[not_seen_already])
+
+        bitmaps[ind]=np.in1d(label,tmp_list).astype('int')
+
+    print("data dimension" + str(bitmaps.shape))
+
+    old_bitmaps=glob.glob("./bitmaps/*")
+    for bitmap in old_bitmaps:
+        tmp=np.load(bitmap)
+        tmp=np.pad(tmp,[(0,pad)],mode='constant')
+        np.save(bitmap,tmp)
+
+    # save training data
+    MAX_BITMAP_SIZE = bitmaps.shape[1] 
+    for idx, i in enumerate(to_map_seed_list):
+        file_name = "./bitmaps/" + i.split('/')[-1]
+        np.save(file_name, bitmaps[idx])
+
+def reduce_variable_files():
+
+    global vari_seed_list
+    global havoc_seed_list
+
+    if round_cnt != 1:
+        old_vari_seed_list=vari_seed_list
+        old_havoc_seed_list=havoc_seed_list
+    else:
+        old_vari_seed_list=[]
+        old_havoc_seed_list=[]
+
+    vari_seed_list = glob.glob('./vari_seeds/*')
+    havoc_seed_list = glob.glob('./havoc_seeds/*')
+    minimise_seed_list =list(set(vari_seed_list).difference(old_vari_seed_list))+(list(set(havoc_seed_list).difference(old_havoc_seed_list))) 
+
+    call = subprocess.check_output
+
+    warning=False
+    for f in minimise_seed_list:
+        outfile = "./seeds/"+f.split('/')[-1]+'min'
+        try:
+            out = call(['timeout','10s','./utils/afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
+        except subprocess.CalledProcessError as e:
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : t-min returns non-zero exit status for seed: {0}'.format(f)) 
+
+def cull_nocov():
+    global nocov_list
+    global len_nocov_list
+    global SPLIT_RATIO
+
+    cull_number=(len_nocov_list+len_seed_list)-args.memory_threshold
+    if cull_number > 0:
+        try:
+            deletes=np.random.choice(nocov_list,cull_number,replace=False)
+        except:
+            deletes=[]
+        for file in deletes:
+            os.remove(file)
+    
+        nocov_list=[x for x in nocov_list if x not in deletes]
+        len_nocov_list=len(nocov_list)
+        SPLIT_RATIO=len(seed_list)+len(nocov_list)
+
+
+# process training data from afl raw data
+def process_data_init():
+    #Max seed input file size allowed
+    MAX_MAX_FILE_SIZE = 10000
+    MAX_MAX_BITMAP_SIZE = 2000
+
+    global MAX_BITMAP_SIZE
+    global MAX_FILE_SIZE
+    global SPLIT_RATIO
+    global seed_list
+    global nocov_list
+    global new_seeds
+    global label
+    global len_seed_list
+
+    parse_executable()
 
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
+    len_seed_list = len(seed_list)
     seed_list.sort()
     SPLIT_RATIO = len(seed_list)
     rand_index = np.arange(SPLIT_RATIO)
@@ -69,42 +193,36 @@ def process_data(data):
     max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
     MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
 
-    if data == b"sloww":
-        seed_list+=glob.glob('./nocov/*')
-        new_seeds+=glob.glob('./nocov/id_*')
-        max_file_name = call(['ls', '-S', cwd + '/nocov/']).decode('utf8').split('\n')[0].rstrip('\n')
-        MAX_FILE_SIZENC = os.path.getsize(cwd + '/nocov/' + max_file_name)
-        MAX_FILE_SIZE=max(MAX_FILE_SIZE,MAX_FILE_SIZENC)
-
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
-    os.path.isdir("./splice_seeds/") or os.makedirs("./splice_seeds")
-    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds") #variseeds doesnt actally seem to get used 
+    os.path.isdir("./havoc_seeds/") or os.makedirs("./havoc_seeds")
+    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
+    os.path.isdir("./crashes/") or os.makedirs("./crashes")
+    os.path.isdir("./hangs/") or os.makedirs("./hangs")
     os.path.isdir("./nocov/") or os.makedirs("./nocov")
-    files = glob.glob('./nocov/*')
-    for f in files:
-        os.remove(f)
-
+    nocov_list=glob.glob('./nocov/*')
 
     # obtain raw bitmaps
+    warning = False
     raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
     tmp_cnt = [] #Hold's ID's cumlatively for each seed input
     out = ''
     for f in seed_list:
         tmp_list = [] #Keeps list of ID's for each seed file inside loop
         try:
-            infile=open(f,'r')
             # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '512' if not args.enable_asan else 'none'
+            mem_lim= '1024' if not args.enable_asan else 'none'
             if argvv[0] == './strip':
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '500'] + args.target ,stdin=infile)
-            infile.close()
+                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
-            print('Weird afl-showmap bug again') #JW DBG
-            raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+            if not warning:
+                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
+                warning = True 
+            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
+            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
 
         #Takes the first arg of each tuple generated 
         #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
@@ -127,7 +245,7 @@ def process_data(data):
 
     # label dimension reduction
     # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = np.unique(bitmap, axis=1)
+    fit_bitmap = bitmap
     print("data dimension" + str(fit_bitmap.shape))
 
     # save training data
@@ -135,21 +253,24 @@ def process_data(data):
     for idx, i in enumerate(seed_list):
         file_name = "./bitmaps/" + i.split('/')[-1]
         np.save(file_name, fit_bitmap[idx])
+    
+    label=np.array(label)
 
 
 # training data generator
 def generate_training_data(lb, ub):
     seed = np.zeros((ub - lb, MAX_FILE_SIZE))
     bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
+    train_list=seed_list+nocov_list
     for i in range(lb, ub):
-        tmp = open(seed_list[i], 'rb').read()
+        tmp = open(train_list[i], 'rb').read()
         ln = len(tmp)
         if ln < MAX_FILE_SIZE:
             tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
         seed[i - lb] = [j for j in bytearray(tmp)]
 
     for i in range(lb, ub):
-        file_name = "./bitmaps/" + seed_list[i].split('/')[-1] + ".npy"
+        file_name = "./bitmaps/" + train_list[i].split('/')[-1] + ".npy"
         bitmap[i - lb] = np.load(file_name)
     return seed, bitmap
 
@@ -162,44 +283,24 @@ def step_decay(epoch):
     lrate = initial_lrate * math.pow(drop, math.floor((1 + epoch) / epochs_drop))
     return lrate
 
-
-class LossHistory(keras.callbacks.Callback):
-
-    def on_train_begin(self, logs={}):
-        self.losses = []
-        self.lr = []
-
-    def on_epoch_end(self, batch, logs={}):
-        self.losses.append(logs.get('loss'))
-        self.lr.append(step_decay(len(self.losses)))
-        print(step_decay(len(self.losses)))
-
-
-# compute jaccard accuracy for multiple label
-def accur_1(y_true, y_pred):
-    y_true = tf.round(y_true)
-    pred = tf.round(y_pred)
-    summ = tf.constant(MAX_BITMAP_SIZE, dtype=tf.float32)
-    wrong_num = tf.subtract(summ, tf.reduce_sum(tf.cast(tf.equal(y_true, pred), tf.float32), axis=-1))
-    right_1_num = tf.reduce_sum(tf.cast(tf.logical_and(tf.cast(y_true, tf.bool), tf.cast(pred, tf.bool)), tf.float32), axis=-1)
-    return K.mean(tf.divide(right_1_num, tf.add(right_1_num, wrong_num)))
-
-
 def train_generate(batch_size):
     global seed_list
-    while 1:
-        np.random.shuffle(seed_list)
-        # load a batch of training data
-        for i in range(0, SPLIT_RATIO, batch_size):
-            # load full batch if batchsize is greater than the seeds availible
-            if (i + batch_size) > SPLIT_RATIO:
-                x, y = generate_training_data(i, SPLIT_RATIO)
-                x = x.astype('float32') / 255
-            # load remaining data for last batch
-            else:
-                x, y = generate_training_data(i, i + batch_size)
-                x = x.astype('float32') / 255
-            yield (x, y)
+    global nocov_list
+    np.random.shuffle(seed_list)
+    np.random.shuffle(nocov_list)
+    # load a batch of training data
+    for i in range(0, SPLIT_RATIO, batch_size):
+        # load full batch if batchsize is greater than the seeds availible
+        if (i + batch_size) > SPLIT_RATIO:
+            x, y = generate_training_data(i, SPLIT_RATIO)
+            y=y*2-1
+            x = x.astype('float32') / 255
+        # load remaining data for last batch
+        else:
+            x, y = generate_training_data(i, i + batch_size)
+            y=y*2-1
+            x = x.astype('float32') / 255
+        yield (torch.Tensor(x), torch.Tensor(y))
 
 
 # get vector representation of input
@@ -211,163 +312,59 @@ def vectorize_file(fl):
         tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
     seed[0] = [j for j in bytearray(tmp)]
     seed = seed.astype('float32') / 255
+    seed = torch.from_numpy(seed)
+    seed.requires_grad=True
     return seed
-
-
-# Details are @ https://blog.birost.com/a?ID=00700-6b1d1b35-2c3f-4a07-9c3d-9c319798c6ef in splice section
-# splice two seeds to a new seed
-def splice_seed(fl1, fl2, idxx):
-    tmp1 = open(fl1, 'rb').read()
-    ret = 1
-    randd = fl2
-    while ret == 1:
-        tmp2 = open(randd, 'rb').read()
-        if len(tmp1) >= len(tmp2):
-            lenn = len(tmp2)
-            head = tmp2
-            tail = tmp1
-        else:
-            lenn = len(tmp1)
-            head = tmp1
-            tail = tmp2
-        f_diff = 0
-        l_diff = 0
-
-        #lenn is the longest seed 
-        for i in range(lenn):
-            if tmp1[i] != tmp2[i]:
-                f_diff = i
-                break
-        for i in reversed(range(lenn)):
-            if tmp1[i] != tmp2[i]:
-                l_diff = i
-                break
-
-        #Is this because the shorter inputs are null byte padded on the right ?
-        if f_diff >= 0 and l_diff > 0 and (l_diff - f_diff) >= 2:
-            splice_at = f_diff + random.randint(1, l_diff - f_diff - 1)
-            head = list(head)
-            tail = list(tail)
-            tail[:splice_at] = head[:splice_at]
-            with open('./splice_seeds/tmp_' + str(idxx), 'wb') as f:
-                f.write(bytearray(tail))
-            ret = 0
-        print(f_diff, l_diff)
-        randd = random.choice(seed_list)
-
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, model, layer_list, idxx, splice):
+def gen_adv2(f, fl, optimizer ):
     adv_list = []
-    loss = layer_list[-2][1].output[:, f]   #Takes the output of the f entry of the bitmap classifaction. Of second dense layer...
-    grads = K.gradients(loss, model.input)[0]   #Takes gradient of loss w.r.t all NN input params.
-    iterate = K.function([model.input], [loss, grads])
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
-
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        loss_value, grads_value = iterate([x])
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        val = np.sign(grads_value[0][idx])
-        adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        if round_cnt % 2 == 0:
-            splice_seed(fl[0], fl[1], idxx)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-            loss_value, grads_value = iterate([x])
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
-        else:
-            splice_seed(fl[0], fl[1], idxx + 500)
-            x = vectorize_file('./splice_seeds/tmp_' + str(idxx + 500))
-            loss_value, grads_value = iterate([x])
-            idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-            val = np.sign(grads_value[0][idx])
-            adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx + 500)))
-
+    x = vectorize_file(fl)
+    K=optimizer.RBF_Kernel(x,optimizer.data)
+    out=torch.mm(K,optimizer.Net)[:,f]
+    grads_value = torch.autograd.grad(out,x)[0].numpy()
+    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+    val = np.sign(grads_value[0][idx])
+    adv_list.append((idx, val, fl))
+        
     return adv_list
 
 
 # compute gradient for given input without sign
-def gen_adv3(f, fl, model, layer_list, idxx, splice):
+def gen_adv3(f, fl, optimizer ):
     adv_list = []
-    loss = layer_list[-2][1].output[:, f]
-    grads = K.gradients(loss, model.input)[0]
-    iterate = K.function([model.input], [loss, grads])
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
 
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        loss_value, grads_value = iterate([x])
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        #val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, fl[index]))
-
-    # do not generate spliced seed for the first round
-    if splice == 1 and round_cnt != 0:
-        splice_seed(fl[0], fl[1], idxx)
-        x = vectorize_file('./splice_seeds/tmp_' + str(idxx))
-        loss_value, grads_value = iterate([x])
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        # val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, './splice_seeds/tmp_' + str(idxx)))
+    x = vectorize_file(fl)
+    K=optimizer.RBF_Kernel(x,optimizer.data)
+    out=torch.mm(K,optimizer.Net)[:,f]
+    grads_value = torch.autograd.grad(out,x)[0].numpy()
+    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+    #val = np.sign(grads_value[0][idx])
+    val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
+    adv_list.append((idx, val, fl))
 
     return adv_list
 
 
 # grenerate gradient information to guide furture muatation
-def gen_mutate2(model, edge_num, sign):
+def gen_mutate2(optimizer, edge_num, sign):
     
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
     
     tmp_list = []
-    # select seeds
-    print("#######debug" + str(round_cnt))
-    if round_cnt == 0:
-        new_seed_list = seed_list
-    else:
-        new_seed_list = new_seeds
-
-    if len(new_seed_list) < edge_num: #2 X 500 random samples of seed list
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=True)]
-    else:
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=False)]
-    if len(new_seed_list) < edge_num:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=True)]
-    else:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=False)]
 
     # function pointer for gradient computation
     fn = gen_adv2 if sign else gen_adv3
 
     # select output neurons to compute gradient
-    interested_indice = np.random.choice(MAX_BITMAP_SIZE, edge_num)
-    layer_list = [(layer.name, layer) for layer in model.layers]
+    interested_indice = select_edges(edge_num)
 
     with open('gradient_info_p', 'w') as f:
-        for idxx in range(len(interested_indice[:])):
-            # kears's would stall after multiple gradient compuation. Release memory and reload model to fix it. DBG.
-            if idxx % 100 == 0:
-                del model
-                K.clear_session()
-                model = build_model()
-                model.load_weights('hard_label.h5')
-                layer_list = [(layer.name, layer) for layer in model.layers]
-
-            print("number of feature " + str(idxx))
-            index = int(interested_indice[idxx])
-            fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, model, layer_list, idxx, 1)
+        for edg_idxx, seed_indxx in interested_indice:
+            fl=seed_list[seed_indxx]
+            #print("number of feature " + str(idxx))
+            adv_list = fn(edg_idxx, fl, optimizer )
             tmp_list.append(adv_list)
             #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
             #bitmap and returns the gradients of each input byte w.r.t output 
@@ -379,58 +376,100 @@ def gen_mutate2(model, edge_num, sign):
 
 
 def build_model():
-    #Fixed batch size and epoch?
-    batch_size = 32
-    num_classes = MAX_BITMAP_SIZE #Remember that this is called every iteration such that is 
-    epochs = 50                   #retrained on new bitmap sizes.
 
-    #Two FC layers with 
-    #MAX_FILE_SIZE -> FC -> 4096 -> RELU -> FC -> MAX_BITMAP_SIZE -> SIGMOID
-    model = Sequential()
-    model.add(Dense(4096, input_dim=MAX_FILE_SIZE))
-    model.add(Activation('relu'))
-    model.add(Dense(num_classes))
-    model.add(Activation('sigmoid'))
+    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0,is_cuda=args.enable_cuda)
+    if args.enable_cuda:
+        optimizer.to(device)#<-Will this work?
 
-    #Adams
-    opt = keras.optimizers.adam(lr=0.0001) #Fixed LR
+    return optimizer
 
-    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=[accur_1])
-    model.summary()
+def accur_1(y_true, y_pred):
+    y_true = torch.sign(y_true - 1e-6)#Make better
+    pred =torch.sign(y_pred - 1e-6) 
+    summ = MAX_BITMAP_SIZE
+    right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
+    wrong_num = summ-right_num
+    return torch.mean(right_num/(right_num+wrong_num))
 
-    return model
+def train(optimizer):
+    batch_size=SPLIT_RATIO
+    init = time.time()
+    for batch_idx, (data, target) in enumerate(train_generate(batch_size)):
+        if args.enable_cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data,requires_grad=False), \
+                       Variable(target.type(torch.float32),requires_grad=False)
+        optimizer.data=data
+        optimizer.train(inputs=data, targets=target)
+        output = torch.mm(optimizer.K.T,optimizer.Net)
+        acc=accur_1(target,output)
 
-
-def train(model,data):
-    loss_history = LossHistory()
-    lrate = keras.callbacks.LearningRateScheduler(step_decay)
-    callbacks_list = [loss_history, lrate]
-    model.fit_generator(train_generate(16), #BS of 16, fixed?
-                        steps_per_epoch=(SPLIT_RATIO / 16 + 1),
-                        epochs=100,
-                        verbose=1, callbacks=callbacks_list)
-    # Save model and weights
-    model.save_weights("hard_label.h5")
-    #Deletes nocov seeds from seed list and clears nocov directory
-    if data == b"sloww":
-        global seed_list
-        global new_seeds
-        seed_list = glob.glob('./seeds/*')
-        new_seeds = glob.glob('./seeds/id_*')
-        files = glob.glob('./nocov/*')
-        for f in files:
-            os.remove(f)
+    ending = time.time()
+    print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
 
 def gen_grad(data):
     global round_cnt
     t0 = time.time()
-    process_data(data)
-    model = build_model()
-    train(model,data)
-    # model.load_weights('hard_label.h5')
-    gen_mutate2(model, 500, data[:5] == b"train") #500 -> 100 in paper
+    optimizer = build_model()
+    train(optimizer)
+    #100-> 200 mutation cases?
+    gen_mutate2(optimizer, 100, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
-    print(time.time() - t0)
+    #print(time.time() - t0)
+
+def select_edges(edge_num):
+    # candidate edges
+    if np.random.rand() < 0.1:
+        # random selection mechanism
+        alter_edges = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+    else:
+        candidate_set = set()
+        for edge in label:
+            if check_select_edge(edge):
+                candidate_set.add(list(label).index(edge))
+        replace_flag = True if len(candidate_set) < edge_num else False
+        alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
+
+    # random seed list
+    alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
+    #TODO:
+    #Adding table so that seeds and indices arent repeated
+    #Add additional check here to see if edge is in the path of seed file 
+    #Also focus on opitmising the gradient stuff and I think that will be everything
+    #Is nocov wasting time on seeds that will never get passed? 
+
+    for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+        seed=seed_list[seed_indx]
+        seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
+        seed_inds=np.where(seed_bits==1)[0]
+        if not interest_ind in list(seed_inds):
+            candidates=list(candidate_set.intersection(seed_inds))    
+            if candidates:
+                alter_edges[i]=np.random.choice(candidates)
+            else:
+                alter_edges=np.delete(alter_edges,i)
+                alter_seeds=np.delete(alter_seeds,i)
+
+    interested_indice = zip(alter_edges.tolist(), alter_seeds)
+    return interested_indice
+
+
+def check_select_edge(edge_id):
+    SELECT_RATIO = 0.4
+    if edge_id not in correspond_dict.keys():
+        return True
+    
+    correspond_set = correspond_dict[edge_id]
+    if len(correspond_set) == 0:
+        return True
+
+    cover_cnt = 0
+    for ce in correspond_set:
+        if ce in label:
+            cover_cnt += 1
+    if cover_cnt / len(correspond_set) > SELECT_RATIO:
+        return False
+    return True
 
 
 def setup_server():
@@ -443,17 +482,36 @@ def setup_server():
     sock.bind((HOST, PORT))
     #Waits for neuzz execution
     sock.listen(1)
+    print("Waiting for neuzz engine")
     conn, addr = sock.accept()
-    print('Connected by Neuzz execution module ' + str(addr))
+    print('Connected by neuzz engine ' + str(addr))
+    t0=time.time()
+    process_data_init()
+    print("Initial map in: " + str(time.time()-t0) + " seconds")
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
+        print("Sleeping")
         data = conn.recv(1024)
         if not data:
             break
         else:
-            gen_grad(data)
-            conn.sendall(b"start")
+            if data[0:3] == b"MAP":
+                print("Remapping")
+                t0=time.time()
+                reduce_variable_files()
+                process_data_parallel()
+                cull_nocov()
+                print("Remapped in: " + str(time.time()-t0) + " seconds")
+            else:
+                print("Retraining")
+                t0=time.time()
+                reduce_variable_files()
+                process_data_parallel()
+                cull_nocov()
+                print("Remapped in: " + str(time.time()-t0) + " seconds")
+                gen_grad(data)
+                conn.sendall(b"start")
     conn.close()
 
 
@@ -467,8 +525,26 @@ if __name__ == '__main__':
                         help='Enable ASAN (runs afl-showmap with -m none)',
                         default=False,
                         action='store_true')
+                    
+    parser.add_argument('-c',
+                        '--enable-cuda',
+                        help='Enables cuda functionality on training',
+                        default=False,
+                        action='store_true')
+
+    parser.add_argument('-n',
+                        '--memory-threshold',
+                        help='Maximum amount of nocov seeds allowed',
+                        type=int,
+                        default=20000)
+
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
+    global args
+    global device
     args = parser.parse_args()
+    if args.enable_cuda:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("Using Device: " + str(device))
     #Start program and spin up server
     setup_server()

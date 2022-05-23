@@ -1,0 +1,9 @@
+binary list
+readelf - 			VERSION: GNU readelf (GNU Binutils) 2.30 		FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -g -O2 -O3 -funroll-loops -fstack-protector-strong
+objdump - 			VERSION: GNU objdump (GNU Binutils) 2.30 		FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -g -O2 -O3 -funroll-loops -fstack-protector-strong
+libxml - 			VERSION: using libxml version 20907 			FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -O2 -O3 -funroll-loops -fstack-protector-strong
+harfbuzz - 			VERSION: harfbuzz-1.7.6 (I think) 				FLAGS: GNU C++ 4.8.4 -mtune=generic -march=i686 -g -g -O2 -O3 -fno-exceptions -fvisibility-inlines-hidden -fPIC -funroll-loops -fstack-protector
+djpeg -				VERSION: version 9c  14-Jan-2018 				FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -O2 -O3 -funroll-loops -fstack-protector-strong
+nm-					VERSION: GNU nm (GNU Binutils) 2.30				FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -g -O2 -O3 -funroll-loops -fstack-protector-strong
+size-				VERSION: GNU size (GNU Binutils) 2.30				FLAGS: GNU C11 5.4.0 20160609 -m32 -mtune=generic -march=i686 -g -g -O2 -O3 -funroll-loops -fstack-protector-strong
+mutool- 			VERSION: mutool version 1.12.0					FLAGS: ???

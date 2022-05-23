@@ -1,1 +1,5 @@
 neuzz_dbg
+neuzz
+seeds/.cur_input
+log_fuzz
+*.pyc
