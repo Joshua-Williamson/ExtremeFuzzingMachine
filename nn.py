@@ -13,10 +13,12 @@ import subprocess
 import numpy as np
 from collections import Counter
 
-from flow import FlowBuilder
+from pyparsing import lineEnd
+
+from utils.flow import FlowBuilder
 import torch
 from torch.autograd import Variable
-from TorchELM import pseudoInverse 
+from utils.TorchELM import pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
@@ -76,7 +78,7 @@ def process_data_parallel():
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -132,7 +134,7 @@ def reduce_variable_files():
     for f in minimise_seed_list:
         outfile = "./seeds/"+f.split('/')[-1]+'min'
         try:
-            out = call(['timeout','10s','./afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
+            out = call(['timeout','10s','./utils/afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -171,11 +173,13 @@ def process_data_init():
     global nocov_list
     global new_seeds
     global label
+    global len_seed_list
 
     parse_executable()
 
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
+    len_seed_list = len(seed_list)
     seed_list.sort()
     SPLIT_RATIO = len(seed_list)
     rand_index = np.arange(SPLIT_RATIO)
@@ -212,7 +216,7 @@ def process_data_init():
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -427,11 +431,12 @@ def select_edges(edge_num):
         alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
 
     # random seed list
-    alter_seeds = np.random.choice(SPLIT_RATIO, edge_num).tolist()
+    alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
     #TODO:
     #Adding table so that seeds and indices arent repeated
     #Add additional check here to see if edge is in the path of seed file 
     #Also focus on opitmising the gradient stuff and I think that will be everything
+    #Is nocov wasting time on seeds that will never get passed? 
 
     for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
         seed=seed_list[seed_indx]

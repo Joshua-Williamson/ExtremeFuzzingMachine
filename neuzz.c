@@ -25,6 +25,7 @@
 #include "include/config.h"
 #include "include/queue.h"
 #include "include/container.h"
+#include "include/debug.h"
 
 /* Most of code is borrowed directly from AFL fuzzer (https://github.com/mirrorer/afl), credits to Michal Zalewski */
 
@@ -2130,6 +2131,13 @@ void start_fuzz(int f_len) {
 
 void main(int argc, char *argv[]) {
   int opt;
+  //TODO: put aftwork in another file
+  SAYF(cBRI " \
+    __________  ___\n \
+   / __/ __/  |/  /\n \
+  / _// _// /|_/ / \n \
+ /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
+        \n\n" cRST);
   while ((opt = getopt(argc, argv, "+i:o:l:m:")) > 0)
 
     switch (opt) {

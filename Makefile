@@ -1,11 +1,17 @@
-CFLAGS_TMIN = -O3 -funroll-loops -Wall -D_FORTIFY_SOURCE=2 -g -Wno-pointer-sign -DAFL_PATH="/usr/local/lib/afl" -DDOC_PATH="/usr/local/share/doc/afl" -DBIN_PATH="/usr/local/bin"
-LDFLAGS_TMIN = -ldl
-
 compile:
 	gcc -O3 -funroll-loops ./neuzz.c -o neuzz
+
 debug:
 	gcc -g -O3 -funroll-loops ./neuzz.c -o neuzz_dbg
 
 clean:
-	rm -r bitmaps crashes seeds splice_seeds vari_seeds
-	mkdir seeds
+	-rm -r bitmaps crashes seeds splice_seeds vari_seeds nocov neuzz neuzz-dbg afl-gcc afl-tmin afl-showmap log_fuzz
+	-mkdir seeds
+
+afl-utils:
+	$(MAKE) -C AFL_utils
+	cp AFL_utils/afl-tmin ./utils/
+	cp AFL_utils/afl-showmap ./utils/
+	cp AFL_utils/afl-gcc .
+
+all: afl-utils compile
