@@ -36,7 +36,7 @@ argvv = sys.argv[1:]
 def parse_executable():
     global correspond_dict
 
-    flow = FlowBuilder(args.target)
+    flow = FlowBuilder(args.target[0])
     with open(flow.correspond_target, 'r') as fopen:
         correspond_dict = eval(fopen.readline())
 
@@ -357,7 +357,8 @@ def gen_mutate2(optimizer, edge_num, sign):
     interested_indice = select_edges(edge_num)
 
     with open('gradient_info_p', 'w') as f:
-        for edg_idxx, fl in interested_indice:
+        for edg_idxx, seed_indxx in interested_indice:
+            fl=seed_list[seed_indxx]
             #print("number of feature " + str(idxx))
             adv_list = fn(edg_idxx, fl, optimizer )
             tmp_list.append(adv_list)
@@ -421,7 +422,7 @@ def select_edges(edge_num):
         candidate_set = set()
         for edge in label:
             if check_select_edge(edge):
-                candidate_set.add(label.index(edge))
+                candidate_set.add(list(label).index(edge))
         replace_flag = True if len(candidate_set) < edge_num else False
         alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
 
@@ -432,15 +433,17 @@ def select_edges(edge_num):
     #Add additional check here to see if edge is in the path of seed file 
     #Also focus on opitmising the gradient stuff and I think that will be everything
 
-    for i,(seed,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+    for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+        seed=seed_list[seed_indx]
         seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
-        seed_inds=np.where(seed_bits==1)
-        if interest_ind not in seed_inds:
+        seed_inds=np.where(seed_bits==1)[0]
+        if not interest_ind in list(seed_inds):
             candidates=list(candidate_set.intersection(seed_inds))    
             if candidates:
                 alter_edges[i]=np.random.choice(candidates)
             else:
                 alter_edges=np.delete(alter_edges,i)
+                alter_seeds=np.delete(alter_seeds,i)
 
     interested_indice = zip(alter_edges.tolist(), alter_seeds)
     return interested_indice
