@@ -13,6 +13,7 @@ import subprocess
 import numpy as np
 from collections import Counter
 
+from flow import FlowBuilder
 import torch
 from torch.autograd import Variable
 from TorchELM import pseudoInverse 
@@ -31,6 +32,13 @@ np.random.seed(seed)
 random.seed(seed)
 # get binary argv
 argvv = sys.argv[1:]
+
+def parse_executable():
+    global correspond_dict
+
+    flow = FlowBuilder(args.target)
+    with open(flow.correspond_target, 'r') as fopen:
+        correspond_dict = eval(fopen.readline())
 
 def process_data_parallel():
 
@@ -163,6 +171,8 @@ def process_data_init():
     global nocov_list
     global new_seeds
     global label
+
+    parse_executable()
 
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
@@ -304,40 +314,31 @@ def vectorize_file(fl):
 
 # compute gradient for given input
 # taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, optimizer, idxx, splice,edge_num):
+def gen_adv2(f, fl, optimizer ):
     adv_list = []
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
-
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        val = np.sign(grads_value[0][idx])
-        adv_list.append((idx, val, fl[index]))
+    x = vectorize_file(fl)
+    K=optimizer.RBF_Kernel(x,optimizer.data)
+    out=torch.mm(K,optimizer.Net)[:,f]
+    grads_value = torch.autograd.grad(out,x)[0].numpy()
+    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+    val = np.sign(grads_value[0][idx])
+    adv_list.append((idx, val, fl))
         
     return adv_list
 
 
 # compute gradient for given input without sign
-def gen_adv3(f, fl, optimizer, idxx, splice, edge_num):
+def gen_adv3(f, fl, optimizer ):
     adv_list = []
-    ll = 2
-    while fl[0] == fl[1]:
-        fl[1] = random.choice(seed_list)
 
-    for index in range(ll):
-        x = vectorize_file(fl[index])
-        K=optimizer.RBF_Kernel(x,optimizer.data)
-        out=torch.mm(K,optimizer.Net)[:,f]
-        grads_value = torch.autograd.grad(out,x)[0].numpy()
-        idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-        #val = np.sign(grads_value[0][idx])
-        val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-        adv_list.append((idx, val, fl[index]))
+    x = vectorize_file(fl)
+    K=optimizer.RBF_Kernel(x,optimizer.data)
+    out=torch.mm(K,optimizer.Net)[:,f]
+    grads_value = torch.autograd.grad(out,x)[0].numpy()
+    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
+    #val = np.sign(grads_value[0][idx])
+    val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
+    adv_list.append((idx, val, fl))
 
     return adv_list
 
@@ -348,34 +349,17 @@ def gen_mutate2(optimizer, edge_num, sign):
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
     
     tmp_list = []
-    # select seeds
-    #print("#######debug" + str(round_cnt))
-    if round_cnt == 0:
-        new_seed_list = seed_list
-    else:
-        new_seed_list = new_seeds
-
-    if len(new_seed_list) < edge_num: #2 X 500 random samples of seed list
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=True)]
-    else:
-        rand_seed1 = [new_seed_list[i] for i in np.random.choice(len(new_seed_list), edge_num, replace=False)]
-    if len(new_seed_list) < edge_num:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=True)]
-    else:
-        rand_seed2 = [seed_list[i] for i in np.random.choice(len(seed_list), edge_num, replace=False)]
 
     # function pointer for gradient computation
     fn = gen_adv2 if sign else gen_adv3
 
     # select output neurons to compute gradient
-    interested_indice = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+    interested_indice = select_edges(edge_num)
 
     with open('gradient_info_p', 'w') as f:
-        for idxx in range(len(interested_indice[:])):
+        for edg_idxx, fl in interested_indice:
             #print("number of feature " + str(idxx))
-            index = int(interested_indice[idxx])
-            fl = [rand_seed1[idxx], rand_seed2[idxx]]
-            adv_list = fn(index, fl, optimizer, idxx, 1, edge_num)
+            adv_list = fn(edg_idxx, fl, optimizer )
             tmp_list.append(adv_list)
             #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
             #bitmap and returns the gradients of each input byte w.r.t output 
@@ -427,6 +411,57 @@ def gen_grad(data):
     gen_mutate2(optimizer, 100, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     #print(time.time() - t0)
+
+def select_edges(edge_num):
+    # candidate edges
+    if np.random.rand() < 0.1:
+        # random selection mechanism
+        alter_edges = np.random.choice(MAX_BITMAP_SIZE, edge_num)
+    else:
+        candidate_set = set()
+        for edge in label:
+            if check_select_edge(edge):
+                candidate_set.add(label.index(edge))
+        replace_flag = True if len(candidate_set) < edge_num else False
+        alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
+
+    # random seed list
+    alter_seeds = np.random.choice(SPLIT_RATIO, edge_num).tolist()
+    #TODO:
+    #Adding table so that seeds and indices arent repeated
+    #Add additional check here to see if edge is in the path of seed file 
+    #Also focus on opitmising the gradient stuff and I think that will be everything
+
+    for i,(seed,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+        seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
+        seed_inds=np.where(seed_bits==1)
+        if interest_ind not in seed_inds:
+            candidates=list(candidate_set.intersection(seed_inds))    
+            if candidates:
+                alter_edges[i]=np.random.choice(candidates)
+            else:
+                alter_edges=np.delete(alter_edges,i)
+
+    interested_indice = zip(alter_edges.tolist(), alter_seeds)
+    return interested_indice
+
+
+def check_select_edge(edge_id):
+    SELECT_RATIO = 0.4
+    if edge_id not in correspond_dict.keys():
+        return True
+    
+    correspond_set = correspond_dict[edge_id]
+    if len(correspond_set) == 0:
+        return True
+
+    cover_cnt = 0
+    for ce in correspond_set:
+        if ce in label:
+            cover_cnt += 1
+    if cover_cnt / len(correspond_set) > SELECT_RATIO:
+        return False
+    return True
 
 
 def setup_server():
