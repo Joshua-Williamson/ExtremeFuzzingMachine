@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/ioctl.h>
 #include <string.h>
 #include <stdint.h>
 #include <sys/mman.h>
@@ -151,10 +152,11 @@ int old = 0;
 int now = 0;
 char *target_path;                      /* Path to target binary            */
 char *trace_bits;                       /* SHM with instrumentation bitmap  */
-static volatile int stop_soon;          /* Ctrl-C pressed?                  */
 static int cpu_core_count;              /* CPU core count                   */
 static u64 total_cal_us = 0;            /* Total calibration time (us)      */
-static volatile int child_timed_out;    /* Traced process timed out?        */
+static volatile u8 stop_soon,           /* Ctrl-C pressed?                  */
+                   child_timed_out,     /* Traced process timed out?        */
+                   clear_screen = 1;    /* Window resized?                  */
 int kill_signal;                        /* Signal that killed the child     */
 static int out_fd,                      /* Persistent fd for out_file       */
            dev_urandom_fd = -1,         /* Persistent fd for /dev/urandom   */
@@ -179,14 +181,20 @@ size_t len;                             /* Maximum file length for every mutatio
 int loc[10000];                         /* Array to store critical bytes locations*/
 int sign[10000];                        /* Array to store sign of critical bytes  */
 
-static u8 log_msg_buf[2048];            /* Buffer for log information       */
-static u32 queue_cycle = 0;             /* Counting fuzzed cycles           */
+static u8 log_msg_buf[2048],            /* Buffer for log information       */
+          not_on_tty,                   /* Stdout is not tty                */
+          term_too_small;               /* Is the terminal too small?       */
+
+static u8 *use_banner;                  /* Display banner                   */
+static u32 queue_cycle = 0,             /* Counting fuzzed cycles           */
+           stats_update_freq = 1;       /* Stats update frequency (execs)   */
 static struct queue *queue_havoc;       /* Queue for muation in havoc stage */
 struct file_container *file_container;  /* Store file list of Fuzz          */
 static u64 total_bitmap_size    = 0,    /* Total bit count for all bitmaps  */
            total_bitmap_entries = 0,    /* Number of bitmaps counted        */
            total_cal_cycles     = 0,    /* Total calibration cycles         */
-           cur_depth            = 0;    /* Entry depth in queue             */
+           cur_depth            = 0,    /* Entry depth in queue             */
+           start_time;                  /* Start time of fuzz               */
 static u32 rand_cnt;                    /* Random number counter            */
 
 /* default setting, will be change according to different file length */
@@ -381,6 +389,10 @@ static void handle_timeout(int sig) {
 
 }
 
+static void handle_resize(int sig) {
+  clear_screen = 1;
+}
+
 /* Set up signal handlers. More complicated that needs to be, because libc on
    Solaris doesn't resume interrupted reads(), sets SA_RESETHAND when you call
    siginterrupt(), and does other stupid things. */
@@ -401,6 +413,10 @@ void setup_signal_handlers(void) {
   sigaction(SIGHUP, &sa, NULL);
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
+  
+  /*Window Resize*/
+  sa.sa_handler = handle_resize;
+  sigaction(SIGWINCH, &sa, NULL);
 
   /* Exec timeout notifications. */
 
@@ -414,6 +430,7 @@ void setup_signal_handlers(void) {
   sigaction(SIGPIPE, &sa, NULL);
 
 }
+
 
 void init_forkserver(char** argv) {
 
@@ -2113,6 +2130,626 @@ void start_fuzz(int f_len) {
   return;
 }
 
+/* Count the number of bits set in the provided bitmap. Used for the status
+   screen several times every second, does not have to be fast. */
+
+static u32 count_bits(u8* mem) {
+
+  u32* ptr = (u32*)mem;
+  u32  i   = (MAP_SIZE >> 2);
+  u32  ret = 0;
+
+  while (i--) {
+
+    u32 v = *(ptr++);
+
+    /* This gets called on the inverse, virgin bitmap; optimize for sparse
+       data. */
+
+    if (v == 0xffffffff) {
+      ret += 32;
+      continue;
+    }
+
+    v -= ((v >> 1) & 0x55555555);
+    v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+    ret += (((v + (v >> 4)) & 0xF0F0F0F) * 0x01010101) >> 24;
+
+  }
+
+  return ret;
+
+}
+
+
+/* Trim and possibly create a banner for the run. */
+
+static void fix_up_banner(u8* name) {
+
+  if (!use_banner) {
+
+    u8* trim = strrchr(name, '/');
+    if (!trim) use_banner = name; else use_banner = trim + 1;
+
+  }
+
+  if (strlen(use_banner) > 40) {
+
+    u8* tmp = malloc(44);
+    sprintf(tmp, "%.40s...", use_banner);
+    use_banner = tmp;
+
+  }
+
+}
+
+
+static u64 get_cur_time(void) {
+
+  struct timeval tv;
+  struct timezone tz;
+
+  gettimeofday(&tv, &tz);
+
+  return (tv.tv_sec * 1000ULL) + (tv.tv_usec / 1000);
+
+}
+
+static void check_if_tty(void) {
+
+  struct winsize ws;
+
+  if (getenv("AFL_NO_UI")) {
+    OKF("Disabling the UI because AFL_NO_UI is set.");
+    not_on_tty = 1;
+    return;
+  }
+
+  if (ioctl(1, TIOCGWINSZ, &ws)) {
+
+    if (errno == ENOTTY) {
+      OKF("Looks like we're not running on a tty, so I'll be a bit less verbose.");
+      not_on_tty = 1;
+    }
+
+    return;
+  }
+
+}
+
+/* Check terminal dimensions after resize. */
+
+static void check_term_size(void) {
+
+  struct winsize ws;
+
+  term_too_small = 0;
+
+  if (ioctl(1, TIOCGWINSZ, &ws)) return;
+
+  if (ws.ws_row == 0 && ws.ws_col == 0) return;
+  if (ws.ws_row < 25 || ws.ws_col < 80) term_too_small = 1;
+
+}
+
+
+/* Describe integer. Uses 12 cyclic static buffers for return values. The value
+   returned should be five characters or less for all the integers we reasonably
+   expect to see. */
+
+static u8* DI(u64 val) {
+
+  static u8 tmp[12][16];
+  static u8 cur;
+
+  cur = (cur + 1) % 12;
+
+#define CHK_FORMAT(_divisor, _limit_mult, _fmt, _cast) do { \
+    if (val < (_divisor) * (_limit_mult)) { \
+      sprintf(tmp[cur], _fmt, ((_cast)val) / (_divisor)); \
+      return tmp[cur]; \
+    } \
+  } while (0)
+
+  /* 0-9999 */
+  CHK_FORMAT(1, 10000, "%llu", u64);
+
+  /* 10.0k - 99.9k */
+  CHK_FORMAT(1000, 99.95, "%0.01fk", double);
+
+  /* 100k - 999k */
+  CHK_FORMAT(1000, 1000, "%lluk", u64);
+
+  /* 1.00M - 9.99M */
+  CHK_FORMAT(1000 * 1000, 9.995, "%0.02fM", double);
+
+  /* 10.0M - 99.9M */
+  CHK_FORMAT(1000 * 1000, 99.95, "%0.01fM", double);
+
+  /* 100M - 999M */
+  CHK_FORMAT(1000 * 1000, 1000, "%lluM", u64);
+
+  /* 1.00G - 9.99G */
+  CHK_FORMAT(1000LL * 1000 * 1000, 9.995, "%0.02fG", double);
+
+  /* 10.0G - 99.9G */
+  CHK_FORMAT(1000LL * 1000 * 1000, 99.95, "%0.01fG", double);
+
+  /* 100G - 999G */
+  CHK_FORMAT(1000LL * 1000 * 1000, 1000, "%lluG", u64);
+
+  /* 1.00T - 9.99G */
+  CHK_FORMAT(1000LL * 1000 * 1000 * 1000, 9.995, "%0.02fT", double);
+
+  /* 10.0T - 99.9T */
+  CHK_FORMAT(1000LL * 1000 * 1000 * 1000, 99.95, "%0.01fT", double);
+
+  /* 100T+ */
+  strcpy(tmp[cur], "infty");
+  return tmp[cur];
+
+}
+
+/* Describe time delta. Returns one static buffer, 34 chars of less. */
+
+static u8* DTD(u64 cur_ms, u64 event_ms) {
+
+  static u8 tmp[64];
+  u64 delta;
+  s32 t_d, t_h, t_m, t_s;
+
+  if (!event_ms) return "none seen yet";
+
+  delta = cur_ms - event_ms;
+
+  t_d = delta / 1000 / 60 / 60 / 24;
+  t_h = (delta / 1000 / 60 / 60) % 24;
+  t_m = (delta / 1000 / 60) % 60;
+  t_s = (delta / 1000) % 60;
+
+  sprintf(tmp, "%s days, %u hrs, %u min, %u sec", DI(t_d), t_h, t_m, t_s);
+  return tmp;
+
+}
+
+
+
+static void show_stots(void) {
+
+  static u64 last_stats_ms, last_plot_ms, last_ms, last_execs;
+  static double avg_exec;
+  double t_byte_ratio, stab_ratio;
+
+  u64 cur_ms;
+  u32 t_bytes, t_bits;
+
+  u32 banner_len, banner_pad;
+  u8  tmp[256];
+
+  cur_ms = get_cur_time();
+
+  /* If not enough time has passed since last UI update, bail out. */
+
+  if (cur_ms - last_ms < 1000 / UI_TARGET_HZ) return;
+
+  /* Calculate smoothed exec speed stats. */
+
+  if (!last_execs) {
+  
+    avg_exec = ((double)total_execs) * 1000 / (cur_ms - start_time);
+
+  } else {
+
+    double cur_avg = ((double)(total_execs - last_execs)) * 1000 /
+                     (cur_ms - last_ms);
+
+    /* If there is a dramatic (5x+) jump in speed, reset the indicator
+       more quickly. */
+
+    if (cur_avg * 5 < avg_exec || cur_avg / 5 > avg_exec)
+      avg_exec = cur_avg;
+
+    avg_exec = avg_exec * (1.0 - 1.0 / AVG_SMOOTHING) +
+               cur_avg * (1.0 / AVG_SMOOTHING);
+
+  }
+
+  last_ms = cur_ms;
+  last_execs = total_execs;
+
+  /* Tell the callers when to contact us (as measured in execs). */
+
+  stats_update_freq = avg_exec / (UI_TARGET_HZ * 10);
+  if (!stats_update_freq) stats_update_freq = 1;
+
+  /* Do some bitmap stats. */
+
+  t_bytes = count_non_255_bytes(virgin_bits);
+  t_byte_ratio = ((int)t_bytes * 100) / MAP_SIZE;
+
+  /* If we're not on TTY, bail out. */
+
+  if (not_on_tty) return;
+
+  /* Compute some mildly useful bitmap stats. */
+
+  t_bits = (MAP_SIZE << 3) - count_bits(virgin_bits);
+
+  /* Now, for the visuals... */
+
+  if (clear_screen) {
+
+    SAYF(TERM_CLEAR CURSOR_HIDE);
+    clear_screen = 0;
+
+    check_term_size();
+
+  }
+
+  SAYF(TERM_HOME);
+
+  if (term_too_small) {
+
+    SAYF(cBRI "Your terminal is too small to display the UI.\n"
+         "Please resize terminal window to at least 80x25.\n" cRST);
+
+    return;
+
+  }
+
+  /* Let's start by drawing a centered banner. */
+
+  banner_len = 22 + strlen(use_banner);
+  banner_pad = (80 - banner_len) / 2;
+  memset(tmp, ' ', banner_pad);
+
+  sprintf(tmp + banner_pad, "%s " cLCY cLGN
+          " (%s)", cYEL "Extreme Fuzzing Machine", use_banner);
+
+  SAYF("\n%s\n\n", tmp);
+
+  /* "Handy" shortcuts for drawing boxes... */
+
+#define bSTG    bSTART cGRA
+#define bH2     bH bH
+#define bH5     bH2 bH2 bH
+#define bH10    bH5 bH5
+#define bH20    bH10 bH10
+#define bH30    bH20 bH10
+#define SP5     "     "
+#define SP10    SP5 SP5
+#define SP20    SP10 SP10
+
+  /* Lord, forgive me this. */
+
+  SAYF(SET_G1 SP10 bSTG bLT bH bSTOP cBCYA "Time " bSTG bH30 bH10 bH2 bRT bSTOP"\n");
+  SAYF(bSTART SP10 bV bSTOP "  run time : " cRST "%-34s " bSTG bV bSTOP"\n",
+       DTD(cur_ms, start_time));
+  SAYF(bSTART SP10 bV bSTOP " last train: " cRST "%-34s " bSTG bV bSTOP"\n",
+       DTD(cur_ms, start_time));
+  SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH20 bHB bH bSTOP cPIN "Fuzzer " bSTG bHT bH5 bH2 bH2 bRT bSTOP"\n");
+  SAYF(bSTG bV bSTOP "      Status : " cRST "Lorem" "\n");
+
+  fflush(0);
+}
+
+//   if (dumb_mode) {
+
+//     strcpy(tmp, cRST);
+
+//   } else {
+
+//     u64 min_wo_finds = (cur_ms - last_path_time) / 1000 / 60;
+
+//     /* First queue cycle: don't stop now! */
+//     if (queue_cycle == 1 || min_wo_finds < 15) strcpy(tmp, cMGN); else
+
+//     /* Subsequent cycles, but we're still making finds. */
+//     if (cycles_wo_finds < 25 || min_wo_finds < 30) strcpy(tmp, cYEL); else
+
+//     /* No finds for a long time and no test cases to try. */
+//     if (cycles_wo_finds > 100 && !pending_not_fuzzed && min_wo_finds > 120)
+//       strcpy(tmp, cLGN);
+
+//     /* Default: cautiously OK to stop? */
+//     else strcpy(tmp, cLBL);
+
+//   }
+
+
+//   /* We want to warn people about not seeing new paths after a full cycle,
+//      except when resuming fuzzing or running in non-instrumented mode. */
+
+//   if (!dumb_mode && (last_path_time || resuming_fuzz || queue_cycle == 1 ||
+//       in_bitmap || crash_mode)) {
+
+//     SAYF(bV bSTOP "   last new path : " cRST "%-34s ",
+//          DTD(cur_ms, last_path_time));
+
+//   } else {
+
+//     if (dumb_mode)
+
+//       SAYF(bV bSTOP "   last new path : " cPIN "n/a" cRST 
+//            " (non-instrumented mode)        ");
+
+//      else
+
+//       SAYF(bV bSTOP "   last new path : " cRST "none yet " cLRD
+//            "(odd, check syntax!)      ");
+
+//   }
+
+//   SAYF(bSTG bV bSTOP "  total paths : " cRST "%-5s  " bSTG bV "\n",
+//        DI(queued_paths));
+
+//   /* Highlight crashes in red if found, denote going over the KEEP_UNIQUE_CRASH
+//      limit with a '+' appended to the count. */
+
+//   sprintf(tmp, "%s%s", DI(unique_crashes),
+//           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
+
+//   SAYF(bV bSTOP " last uniq crash : " cRST "%-34s " bSTG bV bSTOP
+//        " uniq crashes : %s%-6s " bSTG bV "\n",
+//        DTD(cur_ms, last_crash_time), unique_crashes ? cLRD : cRST,
+//        tmp);
+
+//   sprintf(tmp, "%s%s", DI(unique_hangs),
+//          (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
+
+//   SAYF(bV bSTOP "  last uniq hang : " cRST "%-34s " bSTG bV bSTOP 
+//        "   uniq hangs : " cRST "%-6s " bSTG bV "\n",
+//        DTD(cur_ms, last_hang_time), tmp);
+
+//   SAYF(bVR bH bSTOP cCYA " cycle progress " bSTG bH20 bHB bH bSTOP cCYA
+//        " map coverage " bSTG bH bHT bH20 bH2 bH bVL "\n");
+
+//   /* This gets funny because we want to print several variable-length variables
+//      together, but then cram them into a fixed-width field - so we need to
+//      put them in a temporary buffer first. */
+
+//   sprintf(tmp, "%s%s (%0.02f%%)", DI(current_entry),
+//           queue_cur->favored ? "" : "*",
+//           ((double)current_entry * 100) / queued_paths);
+
+//   SAYF(bV bSTOP "  now processing : " cRST "%-17s " bSTG bV bSTOP, tmp);
+
+//   sprintf(tmp, "%0.02f%% / %0.02f%%", ((double)queue_cur->bitmap_size) * 
+//           100 / MAP_SIZE, t_byte_ratio);
+
+//   SAYF("    map density : %s%-21s " bSTG bV "\n", t_byte_ratio > 70 ? cLRD : 
+//        ((t_bytes < 200 && !dumb_mode) ? cPIN : cRST), tmp);
+
+//   sprintf(tmp, "%s (%0.02f%%)", DI(cur_skipped_paths),
+//           ((double)cur_skipped_paths * 100) / queued_paths);
+
+//   SAYF(bV bSTOP " paths timed out : " cRST "%-17s " bSTG bV, tmp);
+
+//   sprintf(tmp, "%0.02f bits/tuple",
+//           t_bytes ? (((double)t_bits) / t_bytes) : 0);
+
+//   SAYF(bSTOP " count coverage : " cRST "%-21s " bSTG bV "\n", tmp);
+
+//   SAYF(bVR bH bSTOP cCYA " stage progress " bSTG bH20 bX bH bSTOP cCYA
+//        " findings in depth " bSTG bH20 bVL "\n");
+
+//   sprintf(tmp, "%s (%0.02f%%)", DI(queued_favored),
+//           ((double)queued_favored) * 100 / queued_paths);
+
+//   /* Yeah... it's still going on... halp? */
+
+//   SAYF(bV bSTOP "  now trying : " cRST "%-21s " bSTG bV bSTOP 
+//        " favored paths : " cRST "%-22s " bSTG bV "\n", stage_name, tmp);
+
+//   if (!stage_max) {
+
+//     sprintf(tmp, "%s/-", DI(stage_cur));
+
+//   } else {
+
+//     sprintf(tmp, "%s/%s (%0.02f%%)", DI(stage_cur), DI(stage_max),
+//             ((double)stage_cur) * 100 / stage_max);
+
+//   }
+
+//   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
+
+//   sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_cov),
+//           ((double)queued_with_cov) * 100 / queued_paths);
+
+//   SAYF("  new edges on : " cRST "%-22s " bSTG bV "\n", tmp);
+
+//   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
+//           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
+
+//   if (crash_mode) {
+
+//     SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
+//          "   new crashes : %s%-22s " bSTG bV "\n", DI(total_execs),
+//          unique_crashes ? cLRD : cRST, tmp);
+
+//   } else {
+
+//     SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
+//          " total crashes : %s%-22s " bSTG bV "\n", DI(total_execs),
+//          unique_crashes ? cLRD : cRST, tmp);
+
+//   }
+
+//   /* Show a warning about slow execution. */
+
+//   if (avg_exec < 100) {
+
+//     sprintf(tmp, "%s/sec (%s)", DF(avg_exec), avg_exec < 20 ?
+//             "zzzz..." : "slow!");
+
+//     SAYF(bV bSTOP "  exec speed : " cLRD "%-21s ", tmp);
+
+//   } else {
+
+//     sprintf(tmp, "%s/sec", DF(avg_exec));
+//     SAYF(bV bSTOP "  exec speed : " cRST "%-21s ", tmp);
+
+//   }
+
+//   sprintf(tmp, "%s (%s%s unique)", DI(total_tmouts), DI(unique_tmouts),
+//           (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
+
+//   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
+
+//   /* Aaaalmost there... hold on! */
+
+//   SAYF(bVR bH cCYA bSTOP " fuzzing strategy yields " bSTG bH10 bH bHT bH10
+//        bH5 bHB bH bSTOP cCYA " path geometry " bSTG bH5 bH2 bH bVL "\n");
+
+//   if (skip_deterministic) {
+
+//     strcpy(tmp, "n/a, n/a, n/a");
+
+//   } else {
+
+//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
+//             DI(stage_finds[STAGE_FLIP1]), DI(stage_cycles[STAGE_FLIP1]),
+//             DI(stage_finds[STAGE_FLIP2]), DI(stage_cycles[STAGE_FLIP2]),
+//             DI(stage_finds[STAGE_FLIP4]), DI(stage_cycles[STAGE_FLIP4]));
+
+//   }
+
+//   SAYF(bV bSTOP "   bit flips : " cRST "%-37s " bSTG bV bSTOP "    levels : "
+//        cRST "%-10s " bSTG bV "\n", tmp, DI(max_depth));
+
+//   if (!skip_deterministic)
+//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
+//             DI(stage_finds[STAGE_FLIP8]), DI(stage_cycles[STAGE_FLIP8]),
+//             DI(stage_finds[STAGE_FLIP16]), DI(stage_cycles[STAGE_FLIP16]),
+//             DI(stage_finds[STAGE_FLIP32]), DI(stage_cycles[STAGE_FLIP32]));
+
+//   SAYF(bV bSTOP "  byte flips : " cRST "%-37s " bSTG bV bSTOP "   pending : "
+//        cRST "%-10s " bSTG bV "\n", tmp, DI(pending_not_fuzzed));
+
+//   if (!skip_deterministic)
+//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
+//             DI(stage_finds[STAGE_ARITH8]), DI(stage_cycles[STAGE_ARITH8]),
+//             DI(stage_finds[STAGE_ARITH16]), DI(stage_cycles[STAGE_ARITH16]),
+//             DI(stage_finds[STAGE_ARITH32]), DI(stage_cycles[STAGE_ARITH32]));
+
+//   SAYF(bV bSTOP " arithmetics : " cRST "%-37s " bSTG bV bSTOP "  pend fav : "
+//        cRST "%-10s " bSTG bV "\n", tmp, DI(pending_favored));
+
+//   if (!skip_deterministic)
+//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
+//             DI(stage_finds[STAGE_INTEREST8]), DI(stage_cycles[STAGE_INTEREST8]),
+//             DI(stage_finds[STAGE_INTEREST16]), DI(stage_cycles[STAGE_INTEREST16]),
+//             DI(stage_finds[STAGE_INTEREST32]), DI(stage_cycles[STAGE_INTEREST32]));
+
+//   SAYF(bV bSTOP "  known ints : " cRST "%-37s " bSTG bV bSTOP " own finds : "
+//        cRST "%-10s " bSTG bV "\n", tmp, DI(queued_discovered));
+
+//   if (!skip_deterministic)
+//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
+//             DI(stage_finds[STAGE_EXTRAS_UO]), DI(stage_cycles[STAGE_EXTRAS_UO]),
+//             DI(stage_finds[STAGE_EXTRAS_UI]), DI(stage_cycles[STAGE_EXTRAS_UI]),
+//             DI(stage_finds[STAGE_EXTRAS_AO]), DI(stage_cycles[STAGE_EXTRAS_AO]));
+
+//   SAYF(bV bSTOP "  dictionary : " cRST "%-37s " bSTG bV bSTOP
+//        "  imported : " cRST "%-10s " bSTG bV "\n", tmp,
+//        sync_id ? DI(queued_imported) : (u8*)"n/a");
+
+//   sprintf(tmp, "%s/%s, %s/%s",
+//           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
+//           DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]));
+
+//   SAYF(bV bSTOP "       havoc : " cRST "%-37s " bSTG bV bSTOP, tmp);
+
+//   if (t_bytes) sprintf(tmp, "%0.02f%%", stab_ratio);
+//     else strcpy(tmp, "n/a");
+
+//   SAYF(" stability : %s%-10s " bSTG bV "\n", (stab_ratio < 85 && var_byte_count > 40) 
+//        ? cLRD : ((queued_variable && (!persistent_mode || var_byte_count > 20))
+//        ? cMGN : cRST), tmp);
+
+//   if (!bytes_trim_out) {
+
+//     sprintf(tmp, "n/a, ");
+
+//   } else {
+
+//     sprintf(tmp, "%0.02f%%/%s, ",
+//             ((double)(bytes_trim_in - bytes_trim_out)) * 100 / bytes_trim_in,
+//             DI(trim_execs));
+
+//   }
+
+//   if (!blocks_eff_total) {
+
+//     u8 tmp2[128];
+
+//     sprintf(tmp2, "n/a");
+//     strcat(tmp, tmp2);
+
+//   } else {
+
+//     u8 tmp2[128];
+
+//     sprintf(tmp2, "%0.02f%%",
+//             ((double)(blocks_eff_total - blocks_eff_select)) * 100 /
+//             blocks_eff_total);
+
+//     strcat(tmp, tmp2);
+
+//   }
+
+//   SAYF(bV bSTOP "        trim : " cRST "%-37s " bSTG bVR bH20 bH2 bH2 bRB "\n"
+//        bLB bH30 bH20 bH2 bH bRB bSTOP cRST RESET_G1, tmp);
+
+//   /* Provide some CPU utilization stats. */
+
+//   if (cpu_core_count) {
+
+//     double cur_runnable = get_runnable_processes();
+//     u32 cur_utilization = cur_runnable * 100 / cpu_core_count;
+
+//     u8* cpu_color = cCYA;
+
+//     /* If we could still run one or more processes, use green. */
+
+//     if (cpu_core_count > 1 && cur_runnable + 1 <= cpu_core_count)
+//       cpu_color = cLGN;
+
+//     /* If we're clearly oversubscribed, use red. */
+
+//     if (!no_cpu_meter_red && cur_utilization >= 150) cpu_color = cLRD;
+
+// #ifdef HAVE_AFFINITY
+
+//     if (cpu_aff >= 0) {
+
+//       SAYF(SP10 cGRA "[cpu%03u:%s%3u%%" cGRA "]\r" cRST, 
+//            MIN(cpu_aff, 999), cpu_color,
+//            MIN(cur_utilization, 999));
+
+//     } else {
+
+//       SAYF(SP10 cGRA "   [cpu:%s%3u%%" cGRA "]\r" cRST,
+//            cpu_color, MIN(cur_utilization, 999));
+ 
+//    }
+
+// #else
+
+//     SAYF(SP10 cGRA "   [cpu:%s%3u%%" cGRA "]\r" cRST,
+//          cpu_color, MIN(cur_utilization, 999));
+
+// #endif /* ^HAVE_AFFINITY */
+
+//   } else SAYF("\r");
+
+//   /* Hallelujah! */
+
+//   fflush(0);
+
+// }
+
 void main(int argc, char *argv[]) {
   int opt;
   //TODO: put aftwork in another file
@@ -2204,7 +2841,11 @@ void main(int argc, char *argv[]) {
   copy_seeds(in_dir, out_dir);
   init_forkserver(argv + optind);
   srand(time(NULL));
-
+  fix_up_banner(argv[optind]);
+  check_if_tty();
+  start_time=get_cur_time();
+  show_stots();
+  exit(0);
   start_fuzz(len);
   OKF("total execs %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;

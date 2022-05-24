@@ -43,6 +43,7 @@
 #  define cMGN "\x1b[0;35m"
 #  define cCYA "\x1b[0;36m"
 #  define cLGR "\x1b[0;37m"
+#  define cBCYA "\x1b[1;36m"
 #  define cGRA "\x1b[1;90m"
 #  define cLRD "\x1b[1;91m"
 #  define cLGN "\x1b[1;92m"
