@@ -60,6 +60,7 @@ int havoc_blk_large = 8192;
     asm volatile("" ::: "memory")
 /* Map size for the traced binary. */
 #define MAP_SIZE            2<<18
+#define NN_MAP_SIZE         1024
  
 #define R(x) (random() % (x))
 #define likely(_x)   __builtin_expect(!!(_x), 1)
@@ -133,11 +134,13 @@ typedef unsigned long long u64;
 typedef uint64_t u64;
 #endif /* ^__x86_64__ */
 
-unsigned long total_execs;              /* Total number of execs */
 unsigned long execs_per_line=0;         /* Number of execs per line of gradient file explored*/
 int write_nocov;                        /* Bool to write or not to write a nocov */
 int nocov_statistic;                    /*Threshold for a number to be under for a nocov case to be written*/
+int stage_cnt = 0;
+int stage_tot = 200;
 static int shm_id;                      /* ID of the SHM region */
+static int nn_shm_id;                   /* Shared memory with NN for stats */
 static int mem_limit = 1024;            /* Maximum memory limit for target program */
 static int cpu_aff = -1;                /* Selected CPU core */
 int round_cnt = 0;                      /* Round number counter */
@@ -152,8 +155,11 @@ int old = 0;
 int now = 0;
 char *target_path;                      /* Path to target binary            */
 char *trace_bits;                       /* SHM with instrumentation bitmap  */
+char *nn_stats;                         /* Pointer to NN shared memory for stats*/
+char *fn = "-";                               /* Current file */
 static int cpu_core_count;              /* CPU core count                   */
 static u64 total_cal_us = 0;            /* Total calibration time (us)      */
+static u64 total_execs;
 static volatile u8 stop_soon,           /* Ctrl-C pressed?                  */
                    child_timed_out,     /* Traced process timed out?        */
                    clear_screen = 1;    /* Window resized?                  */
@@ -174,6 +180,7 @@ char virgin_bits[MAP_SIZE];             /* Regions yet untouched by fuzzing */
 char crash_bits[MAP_SIZE];             /* Regions yet untouched by crashing*/
 char tmout_bits[MAP_SIZE];             /* Regions yet untouched by tmouting*/
 
+char *nn_arr[15];
 static int mut_cnt = 0;                 /* Total mutation counter           */
 static int havoc_cnt = 0;               /* Total mutation counter by havoc  */
 char *out_buf, *out_buf1, *out_buf2, *out_buf3;
@@ -185,7 +192,8 @@ static u8 log_msg_buf[2048],            /* Buffer for log information       */
           not_on_tty,                   /* Stdout is not tty                */
           term_too_small;               /* Is the terminal too small?       */
 
-static u8 *use_banner;                  /* Display banner                   */
+static u8 *use_banner,                  /* Display banner                   */
+          *stage_name = "init";         /* Name of the current fuzz stage   */
 static u32 queue_cycle = 0,             /* Counting fuzzed cycles           */
            stats_update_freq = 1;       /* Stats update frequency (execs)   */
 static struct queue *queue_havoc;       /* Queue for muation in havoc stage */
@@ -194,7 +202,8 @@ static u64 total_bitmap_size    = 0,    /* Total bit count for all bitmaps  */
            total_bitmap_entries = 0,    /* Number of bitmaps counted        */
            total_cal_cycles     = 0,    /* Total calibration cycles         */
            cur_depth            = 0,    /* Entry depth in queue             */
-           start_time;                  /* Start time of fuzz               */
+           start_time,                  /* Start time of fuzz               */
+           grads_last;
 static u32 rand_cnt;                    /* Random number counter            */
 
 /* default setting, will be change according to different file length */
@@ -279,6 +288,19 @@ static u32 count_non_255_bytes(u8* mem) {
 
 }
 
+static void show_stots(void);
+
+static u64 get_cur_time(void) {
+
+  struct timeval tv;
+  struct timezone tz;
+
+  gettimeofday(&tv, &tz);
+
+  return (tv.tv_sec * 1000ULL) + (tv.tv_usec / 1000);
+
+}
+
 /* Handle stop signal (Ctrl-C, etc). */
 
 static void handle_stop_sig(int sig) {
@@ -288,6 +310,8 @@ static void handle_stop_sig(int sig) {
   if (child_pid > 0) kill(child_pid, SIGKILL);
   if (forksrv_pid > 0) kill(forksrv_pid, SIGKILL);
   OKF("total execs %ld edge coverage %d.", total_execs,(int)(count_non_255_bytes(virgin_bits)));
+  SAYF(CURSOR_SHOW cLRD "\n\n+++ Testing aborted %s +++\n" cRST,
+       stop_soon == 2 ? "programmatically" : "by user");
 
   free(out_buf);
   free(out_buf1);
@@ -592,6 +616,7 @@ void init_forkserver(char** argv) {
 static void remove_shm(void) {
 
   shmctl(shm_id, IPC_RMID, NULL);
+  shmctl(nn_shm_id, IPC_RMID, NULL);
 
 }
 
@@ -607,7 +632,20 @@ void setup_shm(void) {
 
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
-  if (shm_id < 0) WARNF("shmget() failed");
+  /*I know this is dumb, but I cant think of a better way*/
+
+#define GETEKYDIR ("/tmp")
+#define PROJECTID  (6667)
+
+  key_t unsafe_key = ftok(GETEKYDIR, PROJECTID);
+  if ( unsafe_key < 0 ){
+      WARNF("ftok error");
+      exit(1);
+  }
+  nn_shm_id = shmget(unsafe_key, NN_MAP_SIZE, IPC_CREAT | IPC_EXCL | 0666);
+
+  if (shm_id < 0) WARNF("Fork server shmget() failed");
+  if (nn_shm_id < 0) WARNF("Python module shmget() failed");
 
   atexit(remove_shm);
 
@@ -623,8 +661,9 @@ void setup_shm(void) {
   free(shm_str);
 
   trace_bits = shmat(shm_id, NULL, 0);
+  nn_stats = shmat(nn_shm_id, 0, 0);
 
-  if (!trace_bits) WARNF("shmat() failed");
+  if ((!trace_bits) || (!nn_stats)) WARNF("shmat() failed");
 
 }
 
@@ -1061,6 +1100,8 @@ static void bind_to_free_cpu(void) {
 
 static u8 run_target(int timeout) {
 
+  show_stots();
+
   static struct itimerval it;
   static u32 prev_timed_out = 0;
 
@@ -1242,6 +1283,21 @@ void parse_array(char * str, int * array){
         array[i]=atoi(token);
         i++;
         token = strtok(NULL, ",");
+    }
+
+    return;
+}
+
+void parse_char_array(char * str, char ** array){
+    
+    int i=0;
+    
+    char* token = strtok(str,"|");
+    
+    while(token != NULL){
+        array[i]=token;
+        i++;
+        token = strtok(NULL, "|");
     }
 
     return;
@@ -1504,6 +1560,8 @@ void execute_target_program_vari(char* out_buf, size_t length, char* out_dir) {
 
 /* gradient guided mutation */
 void gen_mutate() {
+  stage_name = "gradient (mutation)";
+  stage_tot = atoi(nn_arr[8]);
   file_container = create_file_container();
   /* flip interesting locations within 14 iterations */
   for (int iter = 0; iter < 13; iter = iter + 1) {
@@ -1566,6 +1624,8 @@ void gen_mutate() {
     }
   }
 
+  stage_name = "gradient (random ins/del)";
+
   /* random insertion/deletion */
   int cut_len = 0;
   int del_loc = 0;
@@ -1596,6 +1656,9 @@ void gen_mutate() {
 
 /* afl havoc stage mutation */
 void afl_havoc_stage(struct queue_entry* q) {
+
+  stage_name = "havoc";
+
   u8* havoc_in_buf = load_entry(q);
 
   u32 perf_score = calculate_score(q);
@@ -1977,6 +2040,7 @@ void copy_seeds(char *in_dir, char *out_dir) {
 }
 
 void fuzz_lop(char *grad_file, int sock) {
+  grads_last=get_cur_time();
   copy_file("gradient_info_p", grad_file);
   FILE *stream = fopen(grad_file, "r");
   char *line = NULL;
@@ -1991,35 +2055,35 @@ void fuzz_lop(char *grad_file, int sock) {
   OKF("currect cnt: %d, gen_mutate start", queue_cycle);
   
   /* parse the gradient to guide fuzzing */
-  int line_cnt = 0;
   int total_execs_old=0;
   float nocov_seeds_threshold=10000.;
   int remap_interval =50;
 
+  stage_cnt=0;
   while ((nread = getline(&line, &llen, stream)) != -1) {
-    line_cnt = line_cnt + 1;
+    stage_cnt = stage_cnt + 1;
 
     /* parse gradient info */
     char *loc_str = strtok(line, "|");
     char *sign_str = strtok(NULL, "|");
-    char *fn = strtok(strtok(NULL, "|"), "\n");
+    fn = strtok(strtok(NULL, "|"), "\n");
     parse_array(loc_str, loc);
     parse_array(sign_str, sign);
 
     /* print edge coverage per 10 files*/
-    if ((line_cnt % 10) == 0) {
+    if ((stage_cnt % 10) == 0) {
       /*Nocov stats update*/
       execs_per_line = total_execs -total_execs_old;
       total_execs_old = total_execs;
       write_nocov = count_seeds("nocov","+nocov") < nocov_seeds_threshold*(1+round_cnt);
-      if(line_cnt ==1) write_nocov =0;
+      if(stage_cnt ==1) write_nocov =0;
       nocov_statistic = 1000000*(nocov_seeds_threshold/(200*execs_per_line));
-      OKF("fuzzing state: line_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d", line_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
+      OKF("fuzzing state: stage_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d", stage_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
       fflush(stdout);
     }
 
     /*Send remap signal*/
-    if ((line_cnt % remap_interval) == 0){
+    if ((stage_cnt % remap_interval) == 0){
         OKF("Remap Signal ");
         send(sock,"MAP", 5,0);
     }
@@ -2051,15 +2115,16 @@ void fuzz_lop(char *grad_file, int sock) {
   /* afl havoc stage */
   struct queue_entry* q_entry = queue_havoc->head->next;
 
-  int queue_cnt = 0;
-  int queue_size = queue_havoc->size;
+  int stage_cnt = 0;
+  stage_tot= queue_havoc->size;
 
   while (q_entry) {
     afl_havoc_stage(q_entry);
     q_entry = q_entry->next;
+    fn=q_entry;
 
-    if ((queue_cnt++ % 50) == 0) {
-      ACTF("rate of havoc stage: %.2lf%%\r", queue_cnt * 100.0 / queue_size);
+    if ((stage_cnt++ % 50) == 0) {
+      ACTF("rate of havoc stage: %.2lf%%\r", stage_cnt * 100.0 / stage_tot);
       fflush(stdout);
     }
   }
@@ -2118,6 +2183,7 @@ void start_fuzz(int f_len) {
   /* dry run initial seeds*/
   dry_run(out_dir);
   /*send(sock, out_dir, strlen(out_dir), 0);*/
+
 
   /* start fuzz */
   char buf[16];
@@ -2183,17 +2249,6 @@ static void fix_up_banner(u8* name) {
 
 }
 
-
-static u64 get_cur_time(void) {
-
-  struct timeval tv;
-  struct timezone tz;
-
-  gettimeofday(&tv, &tz);
-
-  return (tv.tv_sec * 1000ULL) + (tv.tv_usec / 1000);
-
-}
 
 static void check_if_tty(void) {
 
@@ -2298,7 +2353,7 @@ static u8* DTD(u64 cur_ms, u64 event_ms) {
   u64 delta;
   s32 t_d, t_h, t_m, t_s;
 
-  if (!event_ms) return "none seen yet";
+  if (!event_ms) return "-";
 
   delta = cur_ms - event_ms;
 
@@ -2312,6 +2367,23 @@ static u8* DTD(u64 cur_ms, u64 event_ms) {
 
 }
 
+static u8* DF(double val) {
+
+  static u8 tmp[16];
+
+  if (val < 99.995) {
+    sprintf(tmp, "%0.02f", val);
+    return tmp;
+  }
+
+  if (val < 999.95) {
+    sprintf(tmp, "%0.01f", val);
+    return tmp;
+  }
+
+  return DI((u64)val);
+
+}
 
 
 static void show_stots(void) {
@@ -2408,6 +2480,11 @@ static void show_stots(void) {
 
   SAYF("\n%s\n\n", tmp);
 
+  /* Time to read out the strings from the python module  */
+  /* TODO: make some kind of legend so it isn't so cryptic for people except me*/
+  parse_char_array(nn_stats,nn_arr);
+
+
   /* "Handy" shortcuts for drawing boxes... */
 
 #define bSTG    bSTART cGRA
@@ -2423,332 +2500,35 @@ static void show_stots(void) {
   /* Lord, forgive me this. */
 
   SAYF(SET_G1 SP10 bSTG bLT bH bSTOP cBCYA "Time " bSTG bH30 bH10 bH2 bRT bSTOP"\n");
-  SAYF(bSTART SP10 bV bSTOP "  run time : " cRST "%-34s " bSTG bV bSTOP"\n",
+  SAYF(bSTART SP10 bV bSTOP "   run time : " cRST "%-33s " bSTG bV bSTOP"\n",
        DTD(cur_ms, start_time));
-  SAYF(bSTART SP10 bV bSTOP " last train: " cRST "%-34s " bSTG bV bSTOP"\n",
-       DTD(cur_ms, start_time));
-  SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH20 bHB bH bSTOP cPIN "Fuzzer " bSTG bHT bH5 bH2 bH2 bRT bSTOP"\n");
-  SAYF(bSTG bV bSTOP "      Status : " cRST "Lorem" "\n");
+  SAYF(bSTART SP10 bV bSTOP " last grads : " cRST "%-33s " bSTG bV bSTOP"\n",
+       DTD(cur_ms, grads_last));
+  SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH5 bHB bH10 bH5 bSTOP cPIN "Fuzzer " bSTG bH bHT bH2 bH2 bH5 bRT bSTOP"\n");
+  SAYF(bSTG bV bSTOP "       Status : " cRST "%-18s" bSTG bV bSTOP " Rounds done : " cRST "%-18d" bSTG bV bSTOP"\n",nn_arr[0],round_cnt);
+  sprintf(tmp, "%s%%", nn_arr[1]);
+  SAYF(bSTG bV bSTOP " training acc : " cRST "%-18s" bSTG bV bSTOP,tmp);
+  sprintf(tmp, "%s/sec", DF(avg_exec));
+  SAYF("  Exec speed : " bSTG bSTOP cRST "%-18s" bSTG bV bSTOP"\n",tmp);
+  SAYF(bSTG bVR bH bSTOP cLGX "data " bSTG bH10 bH5 bH2 bHB bH bSTOP cPIX "state " bSTG bH2 bH bHT bH30 bH2 bH bVL bSTOP "\n");
+  SAYF(bSTG bV bSTOP " Bitmap size : " cRST "%-8s" bSTG bV bSTOP "    Stage : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[2], stage_name);
+  sprintf(tmp, "%s/%s (%s%%)", DI(stage_cnt),DI(stage_tot),DI(stage_cnt * 100 /stage_tot)); 
+  SAYF(bSTG bV bSTOP " Corpus size : " cRST "%-8s" bSTG bV bSTOP " Progress : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[3],tmp);
+  if (strlen(fn) > 28) sprintf(tmp, "%.28s ..." , fn );
+  else sprintf(tmp, "%s" , fn );
+  SAYF(bSTG bV bSTOP "  Nocov size : " cRST "%-8s" bSTG bV bSTOP "     Seed : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[4],tmp);
+  SAYF(bSTG bVR bH bSTOP cLGX "module load " bSTG bH10 bHT bH bH2 bH5 bHB bH bSTOP cPIX "findings " bSTG bH20 bH5 bVL bSTOP "\n");
+  sprintf(tmp, "%s total, %s unique", DI(total_crashes),DI(unique_crashes)); 
+  SAYF(bSTG bV bSTOP "  Mapping time : " cRST "%-15s" bSTG bV bSTOP "    Crashes : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[5], tmp);
+  sprintf(tmp, "%s total, %s unique", DI(total_tmout),DI(unique_tmout)); 
+  SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "goupfasterthnprogtmt " bSTG bV bSTOP"\n",nn_arr[6], tmp);
+  SAYF(bSTG bV bSTOP " Training time : " cRST "%-15s" bSTG bV bSTOP " Edge count : " cRST "%-21d" bSTG bV bSTOP"\n",nn_arr[7], t_bytes);
+  SAYF(bSTG bLB bH30 bH2 bHT bH30 bH5 bRB bSTOP "\n");
+  
 
   fflush(0);
 }
 
-//   if (dumb_mode) {
-
-//     strcpy(tmp, cRST);
-
-//   } else {
-
-//     u64 min_wo_finds = (cur_ms - last_path_time) / 1000 / 60;
-
-//     /* First queue cycle: don't stop now! */
-//     if (queue_cycle == 1 || min_wo_finds < 15) strcpy(tmp, cMGN); else
-
-//     /* Subsequent cycles, but we're still making finds. */
-//     if (cycles_wo_finds < 25 || min_wo_finds < 30) strcpy(tmp, cYEL); else
-
-//     /* No finds for a long time and no test cases to try. */
-//     if (cycles_wo_finds > 100 && !pending_not_fuzzed && min_wo_finds > 120)
-//       strcpy(tmp, cLGN);
-
-//     /* Default: cautiously OK to stop? */
-//     else strcpy(tmp, cLBL);
-
-//   }
-
-
-//   /* We want to warn people about not seeing new paths after a full cycle,
-//      except when resuming fuzzing or running in non-instrumented mode. */
-
-//   if (!dumb_mode && (last_path_time || resuming_fuzz || queue_cycle == 1 ||
-//       in_bitmap || crash_mode)) {
-
-//     SAYF(bV bSTOP "   last new path : " cRST "%-34s ",
-//          DTD(cur_ms, last_path_time));
-
-//   } else {
-
-//     if (dumb_mode)
-
-//       SAYF(bV bSTOP "   last new path : " cPIN "n/a" cRST 
-//            " (non-instrumented mode)        ");
-
-//      else
-
-//       SAYF(bV bSTOP "   last new path : " cRST "none yet " cLRD
-//            "(odd, check syntax!)      ");
-
-//   }
-
-//   SAYF(bSTG bV bSTOP "  total paths : " cRST "%-5s  " bSTG bV "\n",
-//        DI(queued_paths));
-
-//   /* Highlight crashes in red if found, denote going over the KEEP_UNIQUE_CRASH
-//      limit with a '+' appended to the count. */
-
-//   sprintf(tmp, "%s%s", DI(unique_crashes),
-//           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
-
-//   SAYF(bV bSTOP " last uniq crash : " cRST "%-34s " bSTG bV bSTOP
-//        " uniq crashes : %s%-6s " bSTG bV "\n",
-//        DTD(cur_ms, last_crash_time), unique_crashes ? cLRD : cRST,
-//        tmp);
-
-//   sprintf(tmp, "%s%s", DI(unique_hangs),
-//          (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
-
-//   SAYF(bV bSTOP "  last uniq hang : " cRST "%-34s " bSTG bV bSTOP 
-//        "   uniq hangs : " cRST "%-6s " bSTG bV "\n",
-//        DTD(cur_ms, last_hang_time), tmp);
-
-//   SAYF(bVR bH bSTOP cCYA " cycle progress " bSTG bH20 bHB bH bSTOP cCYA
-//        " map coverage " bSTG bH bHT bH20 bH2 bH bVL "\n");
-
-//   /* This gets funny because we want to print several variable-length variables
-//      together, but then cram them into a fixed-width field - so we need to
-//      put them in a temporary buffer first. */
-
-//   sprintf(tmp, "%s%s (%0.02f%%)", DI(current_entry),
-//           queue_cur->favored ? "" : "*",
-//           ((double)current_entry * 100) / queued_paths);
-
-//   SAYF(bV bSTOP "  now processing : " cRST "%-17s " bSTG bV bSTOP, tmp);
-
-//   sprintf(tmp, "%0.02f%% / %0.02f%%", ((double)queue_cur->bitmap_size) * 
-//           100 / MAP_SIZE, t_byte_ratio);
-
-//   SAYF("    map density : %s%-21s " bSTG bV "\n", t_byte_ratio > 70 ? cLRD : 
-//        ((t_bytes < 200 && !dumb_mode) ? cPIN : cRST), tmp);
-
-//   sprintf(tmp, "%s (%0.02f%%)", DI(cur_skipped_paths),
-//           ((double)cur_skipped_paths * 100) / queued_paths);
-
-//   SAYF(bV bSTOP " paths timed out : " cRST "%-17s " bSTG bV, tmp);
-
-//   sprintf(tmp, "%0.02f bits/tuple",
-//           t_bytes ? (((double)t_bits) / t_bytes) : 0);
-
-//   SAYF(bSTOP " count coverage : " cRST "%-21s " bSTG bV "\n", tmp);
-
-//   SAYF(bVR bH bSTOP cCYA " stage progress " bSTG bH20 bX bH bSTOP cCYA
-//        " findings in depth " bSTG bH20 bVL "\n");
-
-//   sprintf(tmp, "%s (%0.02f%%)", DI(queued_favored),
-//           ((double)queued_favored) * 100 / queued_paths);
-
-//   /* Yeah... it's still going on... halp? */
-
-//   SAYF(bV bSTOP "  now trying : " cRST "%-21s " bSTG bV bSTOP 
-//        " favored paths : " cRST "%-22s " bSTG bV "\n", stage_name, tmp);
-
-//   if (!stage_max) {
-
-//     sprintf(tmp, "%s/-", DI(stage_cur));
-
-//   } else {
-
-//     sprintf(tmp, "%s/%s (%0.02f%%)", DI(stage_cur), DI(stage_max),
-//             ((double)stage_cur) * 100 / stage_max);
-
-//   }
-
-//   SAYF(bV bSTOP " stage execs : " cRST "%-21s " bSTG bV bSTOP, tmp);
-
-//   sprintf(tmp, "%s (%0.02f%%)", DI(queued_with_cov),
-//           ((double)queued_with_cov) * 100 / queued_paths);
-
-//   SAYF("  new edges on : " cRST "%-22s " bSTG bV "\n", tmp);
-
-//   sprintf(tmp, "%s (%s%s unique)", DI(total_crashes), DI(unique_crashes),
-//           (unique_crashes >= KEEP_UNIQUE_CRASH) ? "+" : "");
-
-//   if (crash_mode) {
-
-//     SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
-//          "   new crashes : %s%-22s " bSTG bV "\n", DI(total_execs),
-//          unique_crashes ? cLRD : cRST, tmp);
-
-//   } else {
-
-//     SAYF(bV bSTOP " total execs : " cRST "%-21s " bSTG bV bSTOP
-//          " total crashes : %s%-22s " bSTG bV "\n", DI(total_execs),
-//          unique_crashes ? cLRD : cRST, tmp);
-
-//   }
-
-//   /* Show a warning about slow execution. */
-
-//   if (avg_exec < 100) {
-
-//     sprintf(tmp, "%s/sec (%s)", DF(avg_exec), avg_exec < 20 ?
-//             "zzzz..." : "slow!");
-
-//     SAYF(bV bSTOP "  exec speed : " cLRD "%-21s ", tmp);
-
-//   } else {
-
-//     sprintf(tmp, "%s/sec", DF(avg_exec));
-//     SAYF(bV bSTOP "  exec speed : " cRST "%-21s ", tmp);
-
-//   }
-
-//   sprintf(tmp, "%s (%s%s unique)", DI(total_tmouts), DI(unique_tmouts),
-//           (unique_hangs >= KEEP_UNIQUE_HANG) ? "+" : "");
-
-//   SAYF (bSTG bV bSTOP "  total tmouts : " cRST "%-22s " bSTG bV "\n", tmp);
-
-//   /* Aaaalmost there... hold on! */
-
-//   SAYF(bVR bH cCYA bSTOP " fuzzing strategy yields " bSTG bH10 bH bHT bH10
-//        bH5 bHB bH bSTOP cCYA " path geometry " bSTG bH5 bH2 bH bVL "\n");
-
-//   if (skip_deterministic) {
-
-//     strcpy(tmp, "n/a, n/a, n/a");
-
-//   } else {
-
-//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-//             DI(stage_finds[STAGE_FLIP1]), DI(stage_cycles[STAGE_FLIP1]),
-//             DI(stage_finds[STAGE_FLIP2]), DI(stage_cycles[STAGE_FLIP2]),
-//             DI(stage_finds[STAGE_FLIP4]), DI(stage_cycles[STAGE_FLIP4]));
-
-//   }
-
-//   SAYF(bV bSTOP "   bit flips : " cRST "%-37s " bSTG bV bSTOP "    levels : "
-//        cRST "%-10s " bSTG bV "\n", tmp, DI(max_depth));
-
-//   if (!skip_deterministic)
-//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-//             DI(stage_finds[STAGE_FLIP8]), DI(stage_cycles[STAGE_FLIP8]),
-//             DI(stage_finds[STAGE_FLIP16]), DI(stage_cycles[STAGE_FLIP16]),
-//             DI(stage_finds[STAGE_FLIP32]), DI(stage_cycles[STAGE_FLIP32]));
-
-//   SAYF(bV bSTOP "  byte flips : " cRST "%-37s " bSTG bV bSTOP "   pending : "
-//        cRST "%-10s " bSTG bV "\n", tmp, DI(pending_not_fuzzed));
-
-//   if (!skip_deterministic)
-//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-//             DI(stage_finds[STAGE_ARITH8]), DI(stage_cycles[STAGE_ARITH8]),
-//             DI(stage_finds[STAGE_ARITH16]), DI(stage_cycles[STAGE_ARITH16]),
-//             DI(stage_finds[STAGE_ARITH32]), DI(stage_cycles[STAGE_ARITH32]));
-
-//   SAYF(bV bSTOP " arithmetics : " cRST "%-37s " bSTG bV bSTOP "  pend fav : "
-//        cRST "%-10s " bSTG bV "\n", tmp, DI(pending_favored));
-
-//   if (!skip_deterministic)
-//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-//             DI(stage_finds[STAGE_INTEREST8]), DI(stage_cycles[STAGE_INTEREST8]),
-//             DI(stage_finds[STAGE_INTEREST16]), DI(stage_cycles[STAGE_INTEREST16]),
-//             DI(stage_finds[STAGE_INTEREST32]), DI(stage_cycles[STAGE_INTEREST32]));
-
-//   SAYF(bV bSTOP "  known ints : " cRST "%-37s " bSTG bV bSTOP " own finds : "
-//        cRST "%-10s " bSTG bV "\n", tmp, DI(queued_discovered));
-
-//   if (!skip_deterministic)
-//     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-//             DI(stage_finds[STAGE_EXTRAS_UO]), DI(stage_cycles[STAGE_EXTRAS_UO]),
-//             DI(stage_finds[STAGE_EXTRAS_UI]), DI(stage_cycles[STAGE_EXTRAS_UI]),
-//             DI(stage_finds[STAGE_EXTRAS_AO]), DI(stage_cycles[STAGE_EXTRAS_AO]));
-
-//   SAYF(bV bSTOP "  dictionary : " cRST "%-37s " bSTG bV bSTOP
-//        "  imported : " cRST "%-10s " bSTG bV "\n", tmp,
-//        sync_id ? DI(queued_imported) : (u8*)"n/a");
-
-//   sprintf(tmp, "%s/%s, %s/%s",
-//           DI(stage_finds[STAGE_HAVOC]), DI(stage_cycles[STAGE_HAVOC]),
-//           DI(stage_finds[STAGE_SPLICE]), DI(stage_cycles[STAGE_SPLICE]));
-
-//   SAYF(bV bSTOP "       havoc : " cRST "%-37s " bSTG bV bSTOP, tmp);
-
-//   if (t_bytes) sprintf(tmp, "%0.02f%%", stab_ratio);
-//     else strcpy(tmp, "n/a");
-
-//   SAYF(" stability : %s%-10s " bSTG bV "\n", (stab_ratio < 85 && var_byte_count > 40) 
-//        ? cLRD : ((queued_variable && (!persistent_mode || var_byte_count > 20))
-//        ? cMGN : cRST), tmp);
-
-//   if (!bytes_trim_out) {
-
-//     sprintf(tmp, "n/a, ");
-
-//   } else {
-
-//     sprintf(tmp, "%0.02f%%/%s, ",
-//             ((double)(bytes_trim_in - bytes_trim_out)) * 100 / bytes_trim_in,
-//             DI(trim_execs));
-
-//   }
-
-//   if (!blocks_eff_total) {
-
-//     u8 tmp2[128];
-
-//     sprintf(tmp2, "n/a");
-//     strcat(tmp, tmp2);
-
-//   } else {
-
-//     u8 tmp2[128];
-
-//     sprintf(tmp2, "%0.02f%%",
-//             ((double)(blocks_eff_total - blocks_eff_select)) * 100 /
-//             blocks_eff_total);
-
-//     strcat(tmp, tmp2);
-
-//   }
-
-//   SAYF(bV bSTOP "        trim : " cRST "%-37s " bSTG bVR bH20 bH2 bH2 bRB "\n"
-//        bLB bH30 bH20 bH2 bH bRB bSTOP cRST RESET_G1, tmp);
-
-//   /* Provide some CPU utilization stats. */
-
-//   if (cpu_core_count) {
-
-//     double cur_runnable = get_runnable_processes();
-//     u32 cur_utilization = cur_runnable * 100 / cpu_core_count;
-
-//     u8* cpu_color = cCYA;
-
-//     /* If we could still run one or more processes, use green. */
-
-//     if (cpu_core_count > 1 && cur_runnable + 1 <= cpu_core_count)
-//       cpu_color = cLGN;
-
-//     /* If we're clearly oversubscribed, use red. */
-
-//     if (!no_cpu_meter_red && cur_utilization >= 150) cpu_color = cLRD;
-
-// #ifdef HAVE_AFFINITY
-
-//     if (cpu_aff >= 0) {
-
-//       SAYF(SP10 cGRA "[cpu%03u:%s%3u%%" cGRA "]\r" cRST, 
-//            MIN(cpu_aff, 999), cpu_color,
-//            MIN(cur_utilization, 999));
-
-//     } else {
-
-//       SAYF(SP10 cGRA "   [cpu:%s%3u%%" cGRA "]\r" cRST,
-//            cpu_color, MIN(cur_utilization, 999));
- 
-//    }
-
-// #else
-
-//     SAYF(SP10 cGRA "   [cpu:%s%3u%%" cGRA "]\r" cRST,
-//          cpu_color, MIN(cur_utilization, 999));
-
-// #endif /* ^HAVE_AFFINITY */
-
-//   } else SAYF("\r");
-
-//   /* Hallelujah! */
-
-//   fflush(0);
-
-// }
 
 void main(int argc, char *argv[]) {
   int opt;
@@ -2844,8 +2624,6 @@ void main(int argc, char *argv[]) {
   fix_up_banner(argv[optind]);
   check_if_tty();
   start_time=get_cur_time();
-  show_stots();
-  exit(0);
   start_fuzz(len);
   OKF("total execs %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;

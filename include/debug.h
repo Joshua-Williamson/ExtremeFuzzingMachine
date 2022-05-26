@@ -43,6 +43,8 @@
 #  define cMGN "\x1b[0;35m"
 #  define cCYA "\x1b[0;36m"
 #  define cLGR "\x1b[0;37m"
+#  define cLGX "\x1b[0;92m"
+#  define cPIX "\x1b[0;95m"
 #  define cBCYA "\x1b[1;36m"
 #  define cGRA "\x1b[1;90m"
 #  define cLRD "\x1b[1;91m"
@@ -169,41 +171,9 @@
 /* Just print stuff to the appropriate stream. */
 
 #ifdef MESSAGES_TO_STDOUT
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    printf("%s", log_msg_buf);                              \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
-#  define SAYF(x...) log(x)
-
+#  define SAYF(x...)    printf(x)
 #else 
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    fprintf(stderr,"%s", log_msg_buf);                             \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
-#  define SAYF(x...) log(x)
-
+#  define SAYF(x...)    fprintf(stderr, x)
 #endif /* ^MESSAGES_TO_STDOUT */
 
 /* Show a prefixed warning. */

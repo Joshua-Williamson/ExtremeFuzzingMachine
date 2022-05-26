@@ -10,11 +10,11 @@ import time
 import random
 import socket
 import subprocess
+from turtle import up, update
 import numpy as np
 from collections import Counter
 
-from pyparsing import lineEnd
-
+import sysv_ipc as ipc
 from utils.flow import FlowBuilder
 import torch
 from torch.autograd import Variable
@@ -44,6 +44,9 @@ def parse_executable():
 
 def process_data_parallel():
 
+    stats["status"]="Remapping input bits"
+    update_shm_buff()
+
     global MAX_BITMAP_SIZE
     global MAX_FILE_SIZE
     global SPLIT_RATIO
@@ -64,6 +67,8 @@ def process_data_parallel():
     len_seed_list,len_nocov_list = len(seed_list),len(nocov_list)
     to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
     SPLIT_RATIO=len(seed_list)+len(nocov_list)
+
+    t0=time.time()
 
     out = ''
     warning = False
@@ -112,10 +117,22 @@ def process_data_parallel():
         file_name = "./bitmaps/" + i.split('/')[-1]
         np.save(file_name, bitmaps[idx])
 
+    stats["corpus size"]=str(len_seed_list)
+    stats['bitmap size']=str(MAX_BITMAP_SIZE)
+    stats['nocov size']=str(len_nocov_list)
+    stats["last mapping time"]=time_format(int(time.time()-t0))
+
+    update_shm_buff()
+
 def reduce_variable_files():
+
+    stats['status']='t-mining'
+    update_shm_buff()
 
     global vari_seed_list
     global havoc_seed_list
+
+    t0=time.time()
 
     if round_cnt != 1:
         old_vari_seed_list=vari_seed_list
@@ -140,8 +157,16 @@ def reduce_variable_files():
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
                 warning = True 
             print('Warning : t-min returns non-zero exit status for seed: {0}'.format(f)) 
+        
+    stats["last reducing time"]=time_format(int(time.time()-t0))
+    update_shm_buff()
+    
 
 def cull_nocov():
+
+    stats['status']='culling nocov'
+    update_shm_buff()
+
     global nocov_list
     global len_nocov_list
     global SPLIT_RATIO
@@ -159,6 +184,9 @@ def cull_nocov():
         len_nocov_list=len(nocov_list)
         SPLIT_RATIO=len(seed_list)+len(nocov_list)
 
+    stats['nocov size']=str(len_nocov_list)
+    update_shm_buff()
+
 
 # process training data from afl raw data
 def process_data_init():
@@ -174,8 +202,25 @@ def process_data_init():
     global new_seeds
     global label
     global len_seed_list
+    global stats
+
+    stats={"status":"-",
+           "last accuracy":"-",
+           "bitmap size":"-",
+           "corpus size":"-",
+           "nocov size":"-",
+           "last mapping time":"-",
+           "last reducing time":"-",
+           "last training time":"-",
+           "num grads":"-"
+        }
+
+    stats["status"]="Mapping"
+    update_shm_buff()
 
     parse_executable()
+    t0=time.time()
+    
 
     # shuffle training samples
     seed_list = glob.glob('./seeds/*')
@@ -256,6 +301,15 @@ def process_data_init():
     
     label=np.array(label)
 
+    stats["corpus size"]=str(len_seed_list)
+    stats['bitmap size']=str(MAX_BITMAP_SIZE)
+    stats["last mapping time"]=time_format(int(time.time()-t0))
+    update_shm_buff()
+
+def time_format(T):
+    t_m = (T/ 60) % 60
+    t_s = (T) % 60
+    return "{:0.0f} min, {:0.0f} sec".format(t_m,t_s)
 
 # training data generator
 def generate_training_data(lb, ub):
@@ -351,6 +405,8 @@ def gen_adv3(f, fl, optimizer ):
 def gen_mutate2(optimizer, edge_num, sign):
     
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
+
+    stats['num grads']=str(edge_num)
     
     tmp_list = []
 
@@ -406,13 +462,19 @@ def train(optimizer):
 
     ending = time.time()
     print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
+    stats["last training time"] = "{:.2f} sec".format(ending-init)
+    stats["last accuracy"] = "{:.2f}".format(acc*100)
+    update_shm_buff()
 
 def gen_grad(data):
     global round_cnt
+    stats["status"]="Training"
+    update_shm_buff()
     t0 = time.time()
     optimizer = build_model()
     train(optimizer)
     #100-> 200 mutation cases?
+    stats["status"] = "Generating gradients"
     gen_mutate2(optimizer, 100, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     #print(time.time() - t0)
@@ -472,8 +534,17 @@ def check_select_edge(edge_id):
         return False
     return True
 
+def update_shm_buff():
+    msg=""
+    for ele in stats.values():
+        msg+=ele+"|"
+    msg=msg[:-1]
+
+    shm.write(bytes(msg, 'utf-8'))
+
 
 def setup_server():
+    global shm 
     #Initalise server config
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     #Such that the OS releases the port quicker for rapid rerunning
@@ -486,13 +557,17 @@ def setup_server():
     print("Waiting for neuzz engine")
     conn, addr = sock.accept()
     print('Connected by neuzz engine ' + str(addr))
+    shm = ipc.SharedMemory(ipc.ftok("/tmp", 6667), 0, 0) 
+    shm.attach(0,0)
     t0=time.time()
     process_data_init()
-    print("Initial map in: " + str(time.time()-t0) + " seconds")
+    print("Initial map in: " + str("{:.1f}".format(time.time()-t0)) + " seconds")
     gen_grad(b"train")
     conn.sendall(b"start")
     while True:
         print("Sleeping")
+        stats['status']='Sleeping'
+        update_shm_buff()
         data = conn.recv(1024)
         if not data:
             break
