@@ -74,7 +74,7 @@ int havoc_blk_large = 8192;
     u32 _len = (len);                                      \
     int _res = write(fd, buf, _len);                       \
     if (_res != _len)                                      \
-      WARNF("Short write to %d %s", _res, fn); \
+      WARNFLOG("Short write to %d %s", _res, fn); \
   } while (0)
 
 #define ck_read(fd, buf, len, fn)                           \
@@ -82,7 +82,7 @@ int havoc_blk_large = 8192;
     u32 _len = (len);                                       \
     int _res = read(fd, buf, _len);                         \
     if (_res != _len)                                       \
-      WARNF("Short read from %d %s", _res, fn); \
+      WARNFLOG("Short read from %d %s", _res, fn); \
   } while (0)
 
 /* User-facing macro to sprintf() to a dynamically allocated buffer. */
@@ -90,7 +90,7 @@ int havoc_blk_large = 8192;
   char *_tmp;                             \
   int _len = snprintf(NULL, 0, _str);     \
   if (_len < 0)                           \
-    WARNF("Whoa, snprintf() fails?!");   \
+    WARNFLOG("Whoa, snprintf() fails?!");   \
   _tmp = malloc(_len + 1);                \
   snprintf((char *)_tmp, _len + 1, _str); \
   _tmp;                                   \
@@ -134,6 +134,22 @@ typedef unsigned long long u64;
 typedef uint64_t u64;
 #endif /* ^__x86_64__ */
 
+/*Logging*/
+
+#define log(...)                                            \
+  do {                                                      \
+    sprintf(log_msg_buf, __VA_ARGS__);                      \
+    time_t rawtime = time(NULL);                            \
+    char strTime[100];                                      \
+    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
+             localtime(&rawtime));                          \
+    FILE *f = fopen("./log_fuzz", "a+");                    \
+    char log_buf[2048];                                     \
+    sprintf(log_buf, "%s: %s \n", strTime, log_msg_buf);       \
+    fputs(log_buf, f);                                      \
+    fclose(f);                                              \
+  } while (0)
+
 unsigned long execs_per_line=0;         /* Number of execs per line of gradient file explored*/
 int write_nocov;                        /* Bool to write or not to write a nocov */
 int nocov_statistic;                    /*Threshold for a number to be under for a nocov case to be written*/
@@ -153,6 +169,8 @@ int total_tmout = 0;                  /* Total tmout found */
 
 int old = 0;
 int now = 0;
+int log_warn = 0;
+int log_fatal = 0;
 char *target_path;                      /* Path to target binary            */
 char *trace_bits;                       /* SHM with instrumentation bitmap  */
 char *nn_stats;                         /* Pointer to NN shared memory for stats*/
@@ -1124,17 +1142,17 @@ static u8 run_target(int timeout) {
     if ((res = write(fsrv_ctl_fd, &prev_timed_out, 4)) != 4) {
 
       if (stop_soon) return 0;
-      WARNF("err%d: Unable to request new process from fork server (OOM?)", res);
+      WARNFLOG("err%d: Unable to request new process from fork server (OOM?)", res);
 
     }
 
     if ((res = read(fsrv_st_fd, &child_pid, 4)) != 4) {
 
       if (stop_soon) return 0;
-      WARNF("err%d: Unable to request new process from fork server (OOM?)",res);
+      WARNFLOG("err%d: Unable to request new process from fork server (OOM?)",res);
 
     }
-    if (child_pid <= 0) WARNF("Fork server is misbehaving (OOM?)");
+    if (child_pid <= 0) WARNFLOG("Fork server is misbehaving (OOM?)");
 
 
   /* Configure timeout, as requested by user, then wait for child to terminate. */
@@ -1147,7 +1165,7 @@ static u8 run_target(int timeout) {
   /* The SIGALRM handler simply kills the child_pid and sets child_timed_out. */
     if ((res = read(fsrv_st_fd, &status, 4)) != 4) {
       if (stop_soon) return 0;
-      WARNF("err%d: Unable to communicate with fork server (OOM?)",res);
+      WARNFLOG("err%d: Unable to communicate with fork server (OOM?)",res);
     }
 
 
@@ -1201,7 +1219,7 @@ static void write_to_testcase(void* mem, u32 len) {
     unlink(out_file); /* Ignore errors. */
 
     fd = open(out_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (fd < 0) WARNF("Unable to create file");
+    if (fd < 0) WARNFLOG("Unable to create file");
 
   ck_write(fd, mem, len, out_file);
 
@@ -1218,7 +1236,7 @@ int count_seeds(char * in_dir, char * filter_str){
     dirp = opendir(in_dir);
     
     if (!dirp) {
-      WARNF("Cannot open directory");
+      WARNFLOG("Cannot open directory");
       return;
     }
 
@@ -1904,6 +1922,7 @@ void afl_havoc_stage(struct queue_entry* q) {
 }
 
 void dry_run(char *dir) {
+  stage_name="Dry running";
   DIR *dp;
   struct dirent *entry;
   struct stat statbuf;
@@ -1929,7 +1948,7 @@ void dry_run(char *dir) {
 
         int fd_tmp = open(entry->d_name, O_RDONLY);
         if (fd_tmp == -1)
-          WARNF("open failed");
+          WARNFLOG("open failed");
         int file_len = statbuf.st_size;
         memset(out_buf1, 0, len);
         ck_read(fd_tmp, out_buf1, file_len, entry->d_name);
@@ -1971,7 +1990,7 @@ void dry_run(char *dir) {
     }
   }
   if (chdir("..") == -1)
-    WARNF("chdir failed");
+    WARNFLOG("chdir failed");
   closedir(dp);
 
   /* estimate the average exec time at the beginning*/
@@ -1985,11 +2004,11 @@ void dry_run(char *dir) {
 
   exec_tmout = (exec_tmout + 20) / 20 * 20;
   exec_tmout = exec_tmout;
-  OKF("avg %d time out %d cnt %d sum %lld .", (int)avg_us, exec_tmout, cnt, total_cal_us);
+  OKFLOG("avg %d time out %d cnt %d sum %lld .", (int)avg_us, exec_tmout, cnt, total_cal_us);
   
   container_to_queue();
   free_file_container(file_container);
-  OKF("dry run %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
+  OKFLOG("dry run %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;
 }
 
@@ -1998,13 +2017,13 @@ void copy_file(char *src, char *dst) {
   int c;
   fptr1 = fopen(src, "r");
   if (fptr1 == NULL) {
-    WARNF("Cannot open file %s ", src);
+    WARNFLOG("Cannot open file %s ", src);
     exit(0);
   }
 
   fptr2 = fopen(dst, "w");
   if (fptr2 == NULL) {
-    WARNF("Cannot open file %s ", dst);
+    WARNFLOG("Cannot open file %s ", dst);
     exit(0);
   }
 
@@ -2047,12 +2066,12 @@ void fuzz_lop(char *grad_file, int sock) {
   size_t llen = 0;
   ssize_t nread;
   if (stream == NULL) {
-    WARNF("fopen");
+    WARNFLOG("fopen");
     exit(EXIT_FAILURE);
   }
 
   time_t tt1 = time(NULL);
-  OKF("currect cnt: %d, gen_mutate start", queue_cycle);
+  OKFLOG("currect cnt: %d, gen_mutate start", queue_cycle);
   
   /* parse the gradient to guide fuzzing */
   int total_execs_old=0;
@@ -2078,20 +2097,20 @@ void fuzz_lop(char *grad_file, int sock) {
       write_nocov = count_seeds("nocov","+nocov") < nocov_seeds_threshold*(1+round_cnt);
       if(stage_cnt ==1) write_nocov =0;
       nocov_statistic = 1000000*(nocov_seeds_threshold/(200*execs_per_line));
-      OKF("fuzzing state: stage_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d", stage_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
+      OKFLOG("fuzzing state: stage_cnt %d edge num %d uniq_crash %d total_crash %d uniq_hang %d total_hang %d", stage_cnt, count_non_255_bytes(virgin_bits),unique_crashes,total_crashes,unique_tmout,total_tmout);
       fflush(stdout);
     }
 
     /*Send remap signal*/
     if ((stage_cnt % remap_interval) == 0){
-        OKF("Remap Signal ");
+        OKFLOG("Remap Signal ");
         send(sock,"MAP", 5,0);
     }
 
     /* read seed into mem */
     int fn_fd = open(fn, O_RDONLY);
     if (fn_fd == -1) {
-      WARNF("open failed");
+      WARNFLOG("open failed");
       exit(0);
     }
     struct stat st;
@@ -2109,8 +2128,8 @@ void fuzz_lop(char *grad_file, int sock) {
   }
 
   time_t tt2 = time(NULL);
-  OKF("current cnt: %d, gen_mutate finished, starting havoc stage", queue_cycle);
-  OKF("gen_mutate use time %fs", difftime(tt2, tt1));
+  OKFLOG("current cnt: %d, gen_mutate finished, starting havoc stage", queue_cycle);
+  OKFLOG("gen_mutate use time %fs", difftime(tt2, tt1));
 
   /* afl havoc stage */
   struct queue_entry* q_entry = queue_havoc->head->next;
@@ -2124,18 +2143,18 @@ void fuzz_lop(char *grad_file, int sock) {
     fn=q_entry;
 
     if ((stage_cnt++ % 50) == 0) {
-      ACTF("rate of havoc stage: %.2lf%%\r", stage_cnt * 100.0 / stage_tot);
+      ACTFLOG("rate of havoc stage: %.2lf%%\r", stage_cnt * 100.0 / stage_tot);
       fflush(stdout);
     }
   }
 
   time_t tt3 = time(NULL);
-  OKF("current cnt: %d, havoc finished", queue_cycle);
-  OKF("havoc use time %fs", difftime(tt3, tt2));
+  OKFLOG("current cnt: %d, havoc finished", queue_cycle);
+  OKFLOG("havoc use time %fs", difftime(tt3, tt2));
   free(line);
   fclose(stream);
   send(sock, "train", 5, 0);
-  OKF("Train Signal");
+  OKFLOG("Train Signal");
   round_cnt++;
 }
 
@@ -2181,9 +2200,8 @@ void start_fuzz(int f_len) {
   
   len = f_len;
   /* dry run initial seeds*/
+  /* Use log functions to message from here because the screen will be up*/
   dry_run(out_dir);
-  /*send(sock, out_dir, strlen(out_dir), 0);*/
-
 
   /* start fuzz */
   char buf[16];
@@ -2191,7 +2209,7 @@ void start_fuzz(int f_len) {
     if (read(sock, buf, 5) == -1)
       WARNF("received failed");
     fuzz_lop("gradient_info", sock);
-    ACTF("%dth iteration, receive", ++queue_cycle);
+    ACTFLOG("%dth iteration, receive", ++queue_cycle);
   }
   return;
 }
@@ -2471,8 +2489,8 @@ static void show_stots(void) {
 
   /* Let's start by drawing a centered banner. */
 
-  banner_len = 22 + strlen(use_banner);
-  banner_pad = (80 - banner_len) / 2;
+  banner_len = 23 + strlen(use_banner);
+  banner_pad = (70 - banner_len) / 2;
   memset(tmp, ' ', banner_pad);
 
   sprintf(tmp + banner_pad, "%s " cLCY cLGN
@@ -2493,6 +2511,8 @@ static void show_stots(void) {
 #define bH10    bH5 bH5
 #define bH20    bH10 bH10
 #define bH30    bH20 bH10
+#define SP      " "
+#define SP2     "  "
 #define SP5     "     "
 #define SP10    SP5 SP5
 #define SP20    SP10 SP10
@@ -2504,7 +2524,7 @@ static void show_stots(void) {
        DTD(cur_ms, start_time));
   SAYF(bSTART SP10 bV bSTOP " last grads : " cRST "%-33s " bSTG bV bSTOP"\n",
        DTD(cur_ms, grads_last));
-  SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH5 bHB bH10 bH5 bSTOP cPIN "Fuzzer " bSTG bH bHT bH2 bH2 bH5 bRT bSTOP"\n");
+  SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH5 bHB bH bSTOP cPIN "Fuzzer " bSTG bH10 bH5 bHT bH2 bH2 bH5 bRT bSTOP"\n");
   SAYF(bSTG bV bSTOP "       Status : " cRST "%-18s" bSTG bV bSTOP " Rounds done : " cRST "%-18d" bSTG bV bSTOP"\n",nn_arr[0],round_cnt);
   sprintf(tmp, "%s%%", nn_arr[1]);
   SAYF(bSTG bV bSTOP " training acc : " cRST "%-18s" bSTG bV bSTOP,tmp);
@@ -2523,8 +2543,15 @@ static void show_stots(void) {
   sprintf(tmp, "%s total, %s unique", DI(total_tmout),DI(unique_tmout)); 
   SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "goupfasterthnprogtmt " bSTG bV bSTOP"\n",nn_arr[6], tmp);
   SAYF(bSTG bV bSTOP " Training time : " cRST "%-15s" bSTG bV bSTOP " Edge count : " cRST "%-21d" bSTG bV bSTOP"\n",nn_arr[7], t_bytes);
-  SAYF(bSTG bLB bH30 bH2 bHT bH30 bH5 bRB bSTOP "\n");
-  
+  SAYF(bSTG bLB bH30 bH2 bX bSTOP cCYA " Log messages" bSTG bH10 bH2 bH2 bHB bH5 bH2 bRB bSTOP "\n");
+  if (log_warn > 10000) sprintf(tmp, "10000(+)!");
+  else sprintf(tmp, "%s" , DI(log_warn));
+  SAYF(bSTG SP SP20 SP10 SP2 bV bSTOP cYEL " [!]" cRST" %-7s", tmp);
+  if (log_fatal > 10000) sprintf(tmp, "10000(+)!");
+  else sprintf(tmp, "%s" , DI(log_fatal));
+  SAYF(SP2 cLRD "[-] " cRST "%-7s" bSTG SP2 bV bSTOP "\n", tmp);
+  SAYF(bSTG SP SP20 SP10 SP2 bLB bH20 bH5 bH2 bRB bSTOP "\n");
+ 
 
   fflush(0);
 }

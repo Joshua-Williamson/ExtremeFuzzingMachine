@@ -183,6 +183,34 @@
     SAYF(cRST "\n"); \
   } while (0)
 
+/* Log functions for when screen is up */
+
+#define WARNFLOG(x...) do { \
+    log_warn++;\
+    if (not_on_tty) SAYF(cYEL "[!] " cBRI "WARNING: " cRST x); \
+    if (not_on_tty) SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define ACTFLOG(x...) do { \
+    if (not_on_tty) SAYF(cLBL "[*] " cRST x); \
+    if (not_on_tty) SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define BADFLOG(x...) do { \
+    log_fatal++;\
+    if (not_on_tty) SAYF(cLRD "\n[-] " cRST x); \
+    if (not_on_tty)SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define OKFLOG(x...) do { \
+    if (not_on_tty) SAYF(cLGN "[+] " cRST x); \
+    if (not_on_tty)SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
 /* Show a prefixed "doing something" message. */
 
 #define ACTF(x...) do { \
