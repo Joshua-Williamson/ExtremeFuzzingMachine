@@ -44,7 +44,7 @@ def parse_executable():
 
 def process_data_parallel():
 
-    stats["status"]="Remapping input bits"
+    stats["status"]="Remapping"
     update_shm_buff()
 
     global MAX_BITMAP_SIZE
@@ -407,6 +407,7 @@ def gen_mutate2(optimizer, edge_num, sign):
     #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
 
     stats['num grads']=str(edge_num)
+    update_shm_buff()
     
     tmp_list = []
 
@@ -474,8 +475,9 @@ def gen_grad(data):
     optimizer = build_model()
     train(optimizer)
     #100-> 200 mutation cases?
-    stats["status"] = "Generating gradients"
-    gen_mutate2(optimizer, 100, data[:5] == b"train") #500 -> 100 in paper
+    stats["status"] = "Generate grads" 
+    update_shm_buff()      
+    gen_mutate2(optimizer, 5, data[:5] == b"train") #500 -> 100 in paper
     round_cnt = round_cnt + 1
     #print(time.time() - t0)
 
@@ -535,12 +537,14 @@ def check_select_edge(edge_id):
     return True
 
 def update_shm_buff():
-    msg=""
+    msg=bytearray()
     for ele in stats.values():
-        msg+=ele+"|"
-    msg=msg[:-1]
+        null_pad=40 - (len(ele)+1) 
+        msg.extend(ele.encode('utf-8'))
+        for i in range(null_pad) :
+            msg.append(0)
 
-    shm.write(bytes(msg, 'utf-8'))
+    shm.write(bytes(msg))
 
 
 def setup_server():
@@ -557,7 +561,7 @@ def setup_server():
     print("Waiting for neuzz engine")
     conn, addr = sock.accept()
     print('Connected by neuzz engine ' + str(addr))
-    shm = ipc.SharedMemory(ipc.ftok("/tmp", 6667), 0, 0) 
+    shm = ipc.SharedMemory(ipc.ftok("/tmp", 6667,silence_warning = True), 0, 0) 
     shm.attach(0,0)
     t0=time.time()
     process_data_init()
@@ -614,6 +618,11 @@ if __name__ == '__main__':
                         type=int,
                         default=20000)
 
+    parser.add_argument('-q',
+                        '--quiet',
+                        help='Suppress printing messages, send to log instead',
+                        default=False,
+                        action='store_true')
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args
@@ -622,5 +631,10 @@ if __name__ == '__main__':
     if args.enable_cuda:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print("Using Device: " + str(device))
+    if args.quiet:
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+
+
     #Start program and spin up server
     setup_server()

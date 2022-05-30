@@ -189,7 +189,9 @@ static int out_fd,                      /* Persistent fd for out_file       */
            fsrv_st_fd;                  /* Fork server status pipe (read)   */
 static int forksrv_pid,                 /* PID of the fork server           */
            child_pid = -1,              /* PID of the fuzzed program        */
-           out_dir_fd = -1;             /* FD of the lock file              */
+           out_dir_fd = -1,             /* FD of the lock file              */
+           nnforkexec_pid,
+           start_nn = 1;
 
 char *in_dir,                           /* Input directory with test cases  */
      *out_file,                         /* File to fuzz, if any             */
@@ -198,7 +200,7 @@ char virgin_bits[MAP_SIZE];             /* Regions yet untouched by fuzzing */
 char crash_bits[MAP_SIZE];             /* Regions yet untouched by crashing*/
 char tmout_bits[MAP_SIZE];             /* Regions yet untouched by tmouting*/
 
-char *nn_arr[15];
+char *nn_arr[9];
 static int mut_cnt = 0;                 /* Total mutation counter           */
 static int havoc_cnt = 0;               /* Total mutation counter by havoc  */
 char *out_buf, *out_buf1, *out_buf2, *out_buf3;
@@ -327,6 +329,7 @@ static void handle_stop_sig(int sig) {
 
   if (child_pid > 0) kill(child_pid, SIGKILL);
   if (forksrv_pid > 0) kill(forksrv_pid, SIGKILL);
+  if ((start_nn) || (nnforkexec_pid > 0)) kill(nnforkexec_pid, SIGKILL);
   OKF("total execs %ld edge coverage %d.", total_execs,(int)(count_non_255_bytes(virgin_bits)));
   SAYF(CURSOR_SHOW cLRD "\n\n+++ Testing aborted %s +++\n" cRST,
        stop_soon == 2 ? "programmatically" : "by user");
@@ -683,6 +686,34 @@ void setup_shm(void) {
 
   if ((!trace_bits) || (!nn_stats)) WARNF("shmat() failed");
 
+}
+
+void start_nn_mod(void){
+
+  if (!start_nn) return;
+
+  nnforkexec_pid = fork();
+
+  if (nnforkexec_pid == 0){
+      execlp("python","python","nn.py", "-q",target_path);
+      exit(127);
+  
+  }
+}
+
+void check_nn_alive(void){
+
+  if (!start_nn) return;
+
+  int status = waitpid(nnforkexec_pid, NULL, WNOHANG);
+
+  if (status < 0)
+    WARNF("waitpid() failed");
+
+  if (status != 0) {
+    FATAL("Neural Net python module died, add the debug flag -d to the args and launch\n" 
+          "the python module seperately with a debugger.");
+  }
 }
 
 void setup_dirs_fds(void) {
@@ -1239,11 +1270,17 @@ int count_seeds(char * in_dir, char * filter_str){
       WARNFLOG("Cannot open directory");
       return;
     }
-
-    while ((entry = readdir(dirp)) != NULL) {
-        if (entry->d_type == DT_REG  && strstr(entry->d_name,filter_str) != NULL ) { /* If the entry is a regular file and has prefix*/
-            file_count++;
-        }
+    if (strcmp(filter_str,"")==1){
+      while ((entry = readdir(dirp)) != NULL) {
+        file_count++;
+      }
+    }
+    else{
+      while ((entry = readdir(dirp)) != NULL) {
+          if (entry->d_type == DT_REG  && strstr(entry->d_name,filter_str) != NULL ) { /* If the entry is a regular file and has prefix*/
+              file_count++;
+          }
+      }
     }
     closedir(dirp);
     return file_count;
@@ -1306,16 +1343,13 @@ void parse_array(char * str, int * array){
     return;
 }
 
-void parse_char_array(char * str, char ** array){
+void set_up_nn_pointers(char * str, char ** array){
     
-    int i=0;
+    int addr_shift=0;
     
-    char* token = strtok(str,"|");
-    
-    while(token != NULL){
-        array[i]=token;
-        i++;
-        token = strtok(NULL, "|");
+    for (int i=0; i < 9; i++){
+        array[i]=str + addr_shift;
+        addr_shift=addr_shift+39;
     }
 
     return;
@@ -1457,12 +1491,28 @@ struct queue_entry* construct_queue_entry(char* fname) {
 
 void container_to_queue() {
     struct file_node* file = file_container->head->next;
+    stage_name="Havoc seed analysis";
+    stage_tot=file_container->size;
+    stage_cnt=0;
+    while (file) {
+      fn=file->fname;
+      struct queue_entry* entry = construct_queue_entry(file->fname);
+      add_entry_to_queue(queue_havoc, entry);
+      file = file->next;
+      stage_cnt++;
+   }
+   fn="";
+}
+
+void container_to_queue_mut() {
+    struct file_node* file = file_container->head->next;
     while (file) {
       struct queue_entry* entry = construct_queue_entry(file->fname);
       add_entry_to_queue(queue_havoc, entry);
       file = file->next;
    }
 }
+
 
 u8* load_entry(struct queue_entry* q) {
   s32 fd;
@@ -1668,7 +1718,7 @@ void gen_mutate() {
     memcpy(out_buf3 + del_loc + cut_len, out_buf + del_loc, len - del_loc);
     execute_target_program_vari(out_buf3, len + cut_len, "vari_seeds");
   }
-  container_to_queue();
+  container_to_queue_mut();
   free_file_container(file_container);
 }
 
@@ -1923,6 +1973,8 @@ void afl_havoc_stage(struct queue_entry* q) {
 
 void dry_run(char *dir) {
   stage_name="Dry running";
+  stage_tot=count_seeds(dir,"");
+  stage_cnt=0;
   DIR *dp;
   struct dirent *entry;
   struct stat statbuf;
@@ -1942,6 +1994,7 @@ void dry_run(char *dir) {
       char *tmp = NULL;
       tmp = strstr(entry->d_name, ".");
       if (tmp != entry->d_name) {
+        fn = entry->d_name;
         /* add dry run seeds to file container */
         char* init_seed = alloc_printf("%s/%s", out_dir, entry->d_name);
         add_file_to_container(file_container, init_seed);
@@ -1986,6 +2039,7 @@ void dry_run(char *dir) {
         total_cal_us = total_cal_us - start_us + stop_us;
         cnt = cnt + 1;
         close(fd_tmp);
+        stage_cnt++;
       }
     }
   }
@@ -2006,6 +2060,7 @@ void dry_run(char *dir) {
   exec_tmout = exec_tmout;
   OKFLOG("avg %d time out %d cnt %d sum %lld .", (int)avg_us, exec_tmout, cnt, total_cal_us);
   
+  fn = "";
   container_to_queue();
   free_file_container(file_container);
   OKFLOG("dry run %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
@@ -2080,6 +2135,7 @@ void fuzz_lop(char *grad_file, int sock) {
 
   stage_cnt=0;
   while ((nread = getline(&line, &llen, stream)) != -1) {
+    check_nn_alive();
     stage_cnt = stage_cnt + 1;
 
     /* parse gradient info */
@@ -2134,15 +2190,16 @@ void fuzz_lop(char *grad_file, int sock) {
   /* afl havoc stage */
   struct queue_entry* q_entry = queue_havoc->head->next;
 
-  int stage_cnt = 0;
+  stage_cnt = 0;
   stage_tot= queue_havoc->size;
 
   while (q_entry) {
+    fn=q_entry->fname;
     afl_havoc_stage(q_entry);
     q_entry = q_entry->next;
-    fn=q_entry;
+    stage_cnt++;
 
-    if ((stage_cnt++ % 50) == 0) {
+    if ((stage_cnt % 50) == 0) {
       ACTFLOG("rate of havoc stage: %.2lf%%\r", stage_cnt * 100.0 / stage_tot);
       fflush(stdout);
     }
@@ -2165,9 +2222,12 @@ void start_fuzz(int f_len) {
   int sock = 0;
   struct sockaddr_in serv_addr;
   if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    WARNF("Socket creation error");
+    WARNF("Socket creation error, %s", strerror(errno));
     exit(0);
   }
+
+
+
   memset(&serv_addr, '0', sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_port = htons(PORT);
@@ -2179,6 +2239,14 @@ void start_fuzz(int f_len) {
     WARNF("Connection Failed");
     exit(0);
   }
+
+  int on;
+  on = fcntl(sock,F_GETFL);
+  on = (on | O_NONBLOCK);
+  if(fcntl(sock,F_SETFL,on) < 0)
+      {
+        perror("turning NONBLOCKING on failed\n");
+      }
 
   ACTF("start of the fuzzing module");
   /* set up buffer */
@@ -2206,10 +2274,17 @@ void start_fuzz(int f_len) {
   /* start fuzz */
   char buf[16];
   while (1) {
-    if (read(sock, buf, 5) == -1)
-      WARNF("received failed");
-    fuzz_lop("gradient_info", sock);
-    ACTFLOG("%dth iteration, receive", ++queue_cycle);
+    check_nn_alive();
+    if (read(sock, buf, 5) != -1){
+      fuzz_lop("gradient_info", sock);
+      ACTFLOG("%dth iteration, receive", ++queue_cycle);
+    }
+    stage_name="Waiting for grads";
+    fn="";
+    stage_cnt=0;
+    stage_tot=0;
+    show_stots();
+    sleep(0.5);
   }
   return;
 }
@@ -2498,11 +2573,6 @@ static void show_stots(void) {
 
   SAYF("\n%s\n\n", tmp);
 
-  /* Time to read out the strings from the python module  */
-  /* TODO: make some kind of legend so it isn't so cryptic for people except me*/
-  parse_char_array(nn_stats,nn_arr);
-
-
   /* "Handy" shortcuts for drawing boxes... */
 
 #define bSTG    bSTART cGRA
@@ -2532,7 +2602,7 @@ static void show_stots(void) {
   SAYF("  Exec speed : " bSTG bSTOP cRST "%-18s" bSTG bV bSTOP"\n",tmp);
   SAYF(bSTG bVR bH bSTOP cLGX "data " bSTG bH10 bH5 bH2 bHB bH bSTOP cPIX "state " bSTG bH2 bH bHT bH30 bH2 bH bVL bSTOP "\n");
   SAYF(bSTG bV bSTOP " Bitmap size : " cRST "%-8s" bSTG bV bSTOP "    Stage : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[2], stage_name);
-  sprintf(tmp, "%s/%s (%s%%)", DI(stage_cnt),DI(stage_tot),DI(stage_cnt * 100 /stage_tot)); 
+  sprintf(tmp, "%s/%s (%s%%)", DI(stage_cnt),DI(stage_tot),(stage_tot == 0 ? "---" : DI(stage_cnt * 100 /stage_tot))); 
   SAYF(bSTG bV bSTOP " Corpus size : " cRST "%-8s" bSTG bV bSTOP " Progress : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[3],tmp);
   if (strlen(fn) > 28) sprintf(tmp, "%.28s ..." , fn );
   else sprintf(tmp, "%s" , fn );
@@ -2566,7 +2636,7 @@ void main(int argc, char *argv[]) {
   / _// _// /|_/ / \n \
  /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
         \n\n" cRST);
-  while ((opt = getopt(argc, argv, "+i:o:l:m:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:d:l:m:")) > 0)
 
     switch (opt) {
     case 'i': /* input dir */
@@ -2577,6 +2647,11 @@ void main(int argc, char *argv[]) {
     case 'o': /* output dir */
       if (out_dir) WARNF("Multiple -o options not supported");
       out_dir = optarg;
+      break;
+
+    case 'd': /* output dir */
+      WARNF("Python debug debug mode, not spawing the engine.");
+      start_nn = 0;
       break;
 
     case 'l': /* file len */
@@ -2639,6 +2714,7 @@ void main(int argc, char *argv[]) {
   get_core_count();
   bind_to_free_cpu();
   setup_shm();
+  set_up_nn_pointers(nn_stats,nn_arr);
   init_count_class16();
   setup_dirs_fds();
   if (!out_file) setup_stdio_file();
@@ -2646,10 +2722,14 @@ void main(int argc, char *argv[]) {
   setup_targetpath(argv[optind]);
   check_crash_handling();
   copy_seeds(in_dir, out_dir);
+  start_nn_mod();
+  check_nn_alive();
   init_forkserver(argv + optind);
   srand(time(NULL));
   fix_up_banner(argv[optind]);
   check_if_tty();
+  OKF("Ok, ready to go!");
+  sleep(4);
   start_time=get_cur_time();
   start_fuzz(len);
   OKF("total execs %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
