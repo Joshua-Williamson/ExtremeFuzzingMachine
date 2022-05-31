@@ -134,22 +134,6 @@ typedef unsigned long long u64;
 typedef uint64_t u64;
 #endif /* ^__x86_64__ */
 
-/*Logging*/
-
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s \n", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
 unsigned long execs_per_line=0;         /* Number of execs per line of gradient file explored*/
 int write_nocov;                        /* Bool to write or not to write a nocov */
 int nocov_statistic;                    /*Threshold for a number to be under for a nocov case to be written*/
@@ -195,7 +179,9 @@ static int forksrv_pid,                 /* PID of the fork server           */
 
 char *in_dir,                           /* Input directory with test cases  */
      *out_file,                         /* File to fuzz, if any             */
-     *out_dir;                          /* Working & output directory       */
+     *out_dir,                          /* Working & output directory       */
+     *log_pth;
+
 char virgin_bits[MAP_SIZE];             /* Regions yet untouched by fuzzing */
 char crash_bits[MAP_SIZE];             /* Regions yet untouched by crashing*/
 char tmout_bits[MAP_SIZE];             /* Regions yet untouched by tmouting*/
@@ -204,7 +190,7 @@ char *nn_arr[9];
 static int mut_cnt = 0;                 /* Total mutation counter           */
 static int havoc_cnt = 0;               /* Total mutation counter by havoc  */
 char *out_buf, *out_buf1, *out_buf2, *out_buf3;
-size_t len;                             /* Maximum file length for every mutation */
+size_t len=0;                             /* Maximum file length for every mutation */
 int loc[10000];                         /* Array to store critical bytes locations*/
 int sign[10000];                        /* Array to store sign of critical bytes  */
 
@@ -237,6 +223,22 @@ enum {
   /* 04 */ FAULT_NOINST,
   /* 05 */ FAULT_NOBITS
 };
+
+/*Logging*/
+
+#define log(...)                                            \
+  do {                                                      \
+    sprintf(log_msg_buf, __VA_ARGS__);                      \
+    time_t rawtime = time(NULL);                            \
+    char strTime[100];                                      \
+    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
+             localtime(&rawtime));                          \
+    FILE *f = fopen(log_pth,"a+");          \
+    char log_buf[2048];                                     \
+    sprintf(log_buf, "%s: %s \n", strTime, log_msg_buf);    \
+    fputs(log_buf, f);                                      \
+    fclose(f);                                              \
+  } while (0)
 
 /* Spin up fork server (instrumented mode only). The idea is explained here:
    http://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html
@@ -771,6 +773,48 @@ static void check_crash_handling(void) {
 
 }
 
+int fsize(FILE *fp){
+    int prev=ftell(fp);
+    fseek(fp, 0L, SEEK_END);
+    int sz=ftell(fp);
+    fseek(fp,prev,SEEK_SET); //go back to where we were
+    return sz;
+}
+
+int set_havoc_template(char *dir){
+  DIR *dp;
+  struct dirent *entry;
+  int tmp;
+  if ((dp = opendir(dir)) == NULL) {
+    WARNF("cannot open directory: %s", dir);
+    return;
+  }
+
+  while ((entry = readdir(dp)) != NULL) {
+    if (entry->d_type == DT_REG){
+      char* init_seed = alloc_printf("%s/%s", dir, entry->d_name);
+      FILE *fl=fopen(init_seed,"r");
+      tmp = fsize(fl);
+      if (tmp > len) len=tmp;
+    }
+  }
+  closedir(dp);
+  /* change num_index and havoc_blk_* according to file len */
+  if (len > 7000) {
+    num_index[13] = (len - 1);
+    havoc_blk_large = (len - 1);
+  }
+  else if (len > 4000) {
+    num_index[13] = (len - 1);
+    num_index[12] = 3072;
+    havoc_blk_large = (len - 1);
+    havoc_blk_medium = 2048;
+    havoc_blk_small = 1024;
+  }
+  OKF("num_index %d %d small %d medium %d large %d", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
+  OKF("mutation len: %ld", len);
+}
+
 /* Detect @@ in args. */
 
 void detect_file_args(char** argv) {
@@ -820,6 +864,7 @@ void detect_file_args(char** argv) {
 /* set up target path */ 
 void setup_targetpath(char * argvs){
     char* cwd = getcwd(NULL, 0);
+    log_pth = alloc_printf("%s/%s", cwd, "log_fuzz");
     target_path = alloc_printf("%s/%s", cwd, argvs);
     argvs = target_path;
 }
@@ -1272,7 +1317,7 @@ int count_seeds(char * in_dir, char * filter_str){
     }
     if (strcmp(filter_str,"")==1){
       while ((entry = readdir(dirp)) != NULL) {
-        file_count++;
+        if (entry->d_type == DT_REG) file_count++;
       }
     }
     else{
@@ -2636,7 +2681,7 @@ void main(int argc, char *argv[]) {
   / _// _// /|_/ / \n \
  /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
         \n\n" cRST);
-  while ((opt = getopt(argc, argv, "+i:o:d:l:m:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:d:m:")) > 0)
 
     switch (opt) {
     case 'i': /* input dir */
@@ -2654,61 +2699,44 @@ void main(int argc, char *argv[]) {
       start_nn = 0;
       break;
 
-    case 'l': /* file len */
-      sscanf(optarg, "%ld", &len);
-      /* change num_index and havoc_blk_* according to file len */
-      if (len > 7000) {
-        num_index[13] = (len - 1);
-        havoc_blk_large = (len - 1);
+    case 'm': /* memory limit: use -m none option for ASAN */
+      if (!strcmp(optarg, "none")) {
+        mem_limit = 0;
+        break;
       }
-      else if (len > 4000) {
-        num_index[13] = (len - 1);
-        num_index[12] = 3072;
-        havoc_blk_large = (len - 1);
-        havoc_blk_medium = 2048;
-        havoc_blk_small = 1024;
+
+      char suffix = 'M';
+      if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 || optarg[0] == '-') {
+        WARNF("Bad syntax used for -m");
+        return -1;
       }
-      OKF("num_index %d %d small %d medium %d large %d", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
-      OKF("mutation len: %ld", len);
+
+      switch (suffix) {
+        case 'T': mem_limit *= 1024 * 1024; break;
+        case 'G': mem_limit *= 1024; break;
+        case 'k': mem_limit /= 1024; break;
+        case 'M': break;
+        default:
+          WARNF("Unsupported suffix or bad syntax for -m");
+          return -1;
+      }
+
+      if (mem_limit < 5) {
+        WARNF("Dangerously low value of -m");
+        return -1;
+      }
+      if (sizeof(rlim_t) == 4 && mem_limit > 2000) {
+        WARNF("Value of -m out of range on 32-bit systems");
+        return -1;
+      }
       break;
-      
-      case 'm': /* memory limit: use -m none option for ASAN */
-          if (!strcmp(optarg, "none")) {
-            mem_limit = 0;
-            break;
-          }
-
-          char suffix = 'M';
-          if (sscanf(optarg, "%llu%c", &mem_limit, &suffix) < 1 || optarg[0] == '-') {
-            WARNF("Bad syntax used for -m");
-            return -1;
-          }
-
-          switch (suffix) {
-            case 'T': mem_limit *= 1024 * 1024; break;
-            case 'G': mem_limit *= 1024; break;
-            case 'k': mem_limit /= 1024; break;
-            case 'M': break;
-            default:
-              WARNF("Unsupported suffix or bad syntax for -m");
-              return -1;
-          }
-
-          if (mem_limit < 5) {
-            WARNF("Dangerously low value of -m");
-            return -1;
-          }
-          if (sizeof(rlim_t) == 4 && mem_limit > 2000) {
-            WARNF("Value of -m out of range on 32-bit systems");
-            return -1;
-          }
-          break;
       
 
     default:
       WARNF("no manual...");
     }
 
+  set_havoc_template(in_dir);
   setup_signal_handlers();
   check_cpu_governor();
   get_core_count();
