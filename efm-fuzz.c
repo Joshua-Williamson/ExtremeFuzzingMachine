@@ -28,7 +28,30 @@
 #include "include/container.h"
 #include "include/debug.h"
 
-/* Most of code is borrowed directly from AFL fuzzer (https://github.com/mirrorer/afl), credits to Michal Zalewski */
+
+/*    __________  ___                                 */ 
+/*   / __/ __/  |/  /                                 */
+/*  / _// _// /|_/ /                                  */
+/* /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022)   */
+
+/* Questions or anything? Contact: Joshua Williamson <1joshua.williamson@gmail.com> */
+
+/* Welcome to EFM: most of this code is borrowed directly from the following chain of other borrows!*/
+/*  \/  */
+/* Program-smoothing: https://github.com/PoShaung/program-smoothing-fuzzing, credits to Po Shaung */
+/*  \/  */
+/* Neuzz: https://github.com/Dongdongshe/neuzz, credits to Dong Dong She */
+/*  \/  */
+/* AFL :(https://github.com/mirrorer/afl), credits to Michal Zalewski */
+
+/* Terrible code warning: As I am a novice in C, I am forewarning that I have introduced some pretty hideous crimes to */
+/*                        programming here. So if you spot any mistakes please tell me, I'd like to improve them. Also */
+/*                        there are some very silly and unsafe things I've here that I aim to fix soon. Most notably   */
+/*                        fixing buffer size allocations that will very very easily overflow with any larger file input*/ 
+/*                        and making an area of shared memory that is pretty badly insucure. I will aim to make this   */
+/*                        safer. So I reccomend you run this in a burner VM. Also as you probably know, fuzzing is     */
+/*                        terrible for your hard drive, so please make the output diectory on a ram disk if you're     */
+/*                        fuzzing on your own beloved hardware.                                                        */                           
 
 /* Fork server init timeout multiplier: we'll wait the user-selected timeout plus this much for the fork server to spin up. */
 #define FORK_WAIT_MULT      10
@@ -44,6 +67,8 @@
 #define EXEC_FAIL_SIG       0xfee1dead
 /* Smoothing divisor for CPU load and exec speed stats (1 - no smoothing). */
 #define AVG_SMOOTHING       16
+
+/* Havoc stuff: */
 /* Caps on block sizes for inserion and deletion operations. The set of numbers are adaptive to file length and the defalut max file length is 10000. */
 /* default setting, will be changed later accroding to file len */
 
@@ -115,10 +140,11 @@ int havoc_blk_large = 8192;
           ((_ret >> 8) & 0x0000FF00));  \
   })
 
+/* Types */
+
 typedef uint8_t  u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
-
 typedef int8_t   s8;
 typedef int16_t  s16;
 typedef int32_t  s32;
@@ -135,85 +161,93 @@ typedef uint64_t u64;
 #endif /* ^__x86_64__ */
 
 unsigned long execs_per_line=0;         /* Number of execs per line of gradient file explored*/
-int write_nocov;                        /* Bool to write or not to write a nocov */
-int nocov_statistic;                    /*Threshold for a number to be under for a nocov case to be written*/
-int stage_cnt = 0;
-int stage_tot = 200;
-static int shm_id;                      /* ID of the SHM region */
-static int nn_shm_id;                   /* Shared memory with NN for stats */
-static int mem_limit = 1024;            /* Maximum memory limit for target program */
-static int cpu_aff = -1;                /* Selected CPU core */
-int round_cnt = 0;                      /* Round number counter */
-int edge_gain = 0;                      /* If there is new edge gain */
-int exec_tmout = 1000;                  /* Exec timeout (ms)                 */
-int unique_crashes = 0;                 /* Amount of unique crashes found */
-int total_crashes = 0;                  /* Total crashes found */
-int unique_tmout = 0;                 /* Amount of unique tmout found */
-int total_tmout = 0;                  /* Total tmout found */
 
-int old = 0;
-int now = 0;
-int log_warn = 0;
-int log_fatal = 0;
-char *target_path;                      /* Path to target binary            */
-char *trace_bits;                       /* SHM with instrumentation bitmap  */
-char *nn_stats;                         /* Pointer to NN shared memory for stats*/
-char *fn = "-";                               /* Current file */
-static int cpu_core_count;              /* CPU core count                   */
-static u64 total_cal_us = 0;            /* Total calibration time (us)      */
-static u64 total_execs;
-static volatile u8 stop_soon,           /* Ctrl-C pressed?                  */
-                   child_timed_out,     /* Traced process timed out?        */
-                   clear_screen = 1;    /* Window resized?                  */
-int kill_signal;                        /* Signal that killed the child     */
+int write_nocov,                        /* Bool to write or not to write a nocov                            */
+    nocov_statistic,                    /* Threshold for a number to be under for a nocov case to be written*/
+    stage_cnt = 0,                      /* Operation counter for stats                                      */
+    stage_tot = 200,                    /* Total operations in stage for stats                              */
+    round_cnt = 0,                      /* Round number counter                                             */
+    edge_gain = 0,                      /* If there is new edge gain                                        */
+    exec_tmout = 1000,                  /* Exec timeout (ms)                                                */
+    unique_crashes = 0,                 /* Amount of unique crashes found                                   */
+    total_crashes = 0,                  /* Total crashes found                                              */
+    unique_tmout = 0,                   /* Amount of unique tmout found                                     */
+    total_tmout = 0,                    /* Total tmout found                                                */
+    old = 0,                            /* Counting amount of old nocov files                               */
+    now = 0,                            /* Amount of nocov files now                                        */
+    log_warn = 0,                       /* Number of warnings in the log                                    */
+    log_fatal = 0,                      /* Any fatal log entries                                            */
+    kill_signal,                        /* Signal that killed the child                                     */
+    loc[10000],                         /* Array to store critical bytes locations                          */
+    sign[10000],                        /* Array to store sign of critical bytes                            */
+    num_index[14] = {0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
+                                        /* Default setting, will change according to different file length  */
+
+
 static int out_fd,                      /* Persistent fd for out_file       */
            dev_urandom_fd = -1,         /* Persistent fd for /dev/urandom   */
            dev_null_fd = -1,            /* Persistent fd for /dev/null      */
            fsrv_ctl_fd,                 /* Fork server control pipe (write) */
-           fsrv_st_fd;                  /* Fork server status pipe (read)   */
-static int forksrv_pid,                 /* PID of the fork server           */
+           fsrv_st_fd,                  /* Fork server status pipe (read)   */
+           forksrv_pid,                 /* PID of the fork server           */
            child_pid = -1,              /* PID of the fuzzed program        */
            out_dir_fd = -1,             /* FD of the lock file              */
-           nnforkexec_pid,
-           start_nn = 1;
+           nnforkexec_pid,              /* PID of fork executing python mod */
+           start_nn = 1,                /* Arg to launch python mod or not  */
+           shm_id,                      /* ID of the SHM region             */
+           nn_shm_id,                   /* Shared memory with NN for stats  */
+           mem_limit = 1024,            /* Maximum memory limit for target  */
+           cpu_aff = -1,                /* Selected CPU core                */
+           cpu_core_count,              /* CPU core count                   */
+           mut_cnt = 0,                 /* Total mutation counter           */
+           havoc_cnt = 0;               /* Total mutation counter by havoc  */
 
-char *in_dir,                           /* Input directory with test cases  */
+char *target_path;                      /* Path to target binary            */
+     *trace_bits,                       /* SHM with instrumentation bitmap  */
+     *nn_stats,                         /* Pointer to NN shared memory stats*/
+     *fn = "-",                         /* Current file                     */
+     *in_dir,                           /* Input directory with test cases  */
      *out_file,                         /* File to fuzz, if any             */
      *out_dir,                          /* Working & output directory       */
-     *log_pth;
+     *log_pth,                          /* Path for log file                */
+     *nn_arr[9];                        /* Points shared mem stats segments */
 
-char virgin_bits[MAP_SIZE];             /* Regions yet untouched by fuzzing */
-char crash_bits[MAP_SIZE];             /* Regions yet untouched by crashing*/
-char tmout_bits[MAP_SIZE];             /* Regions yet untouched by tmouting*/
+char virgin_bits[MAP_SIZE],             /* Regions yet untouched by fuzzing */
+     crash_bits[MAP_SIZE],              /* Regions yet untouched by crashing*/
+     tmout_bits[MAP_SIZE];              /* Regions yet untouched by tmouting*/
+     *out_buf,                          /* Bufs for mutation operations     */ 
+     *out_buf1,                         /* Bufs for mutation operations     */
+     *out_buf2,                         /* Bufs for mutation operations     */
+     *out_buf3;                         /* Bufs for mutation operations     */
 
-char *nn_arr[9];
-static int mut_cnt = 0;                 /* Total mutation counter           */
-static int havoc_cnt = 0;               /* Total mutation counter by havoc  */
-char *out_buf, *out_buf1, *out_buf2, *out_buf3;
-size_t len=0;                             /* Maximum file length for every mutation */
-int loc[10000];                         /* Array to store critical bytes locations*/
-int sign[10000];                        /* Array to store sign of critical bytes  */
-
-static u8 log_msg_buf[2048],            /* Buffer for log information       */
-          not_on_tty,                   /* Stdout is not tty                */
-          term_too_small;               /* Is the terminal too small?       */
-
-static u8 *use_banner,                  /* Display banner                   */
-          *stage_name = "init";         /* Name of the current fuzz stage   */
-static u32 queue_cycle = 0,             /* Counting fuzzed cycles           */
-           stats_update_freq = 1;       /* Stats update frequency (execs)   */
-static struct queue *queue_havoc;       /* Queue for muation in havoc stage */
-struct file_container *file_container;  /* Store file list of Fuzz          */
 static u64 total_bitmap_size    = 0,    /* Total bit count for all bitmaps  */
            total_bitmap_entries = 0,    /* Number of bitmaps counted        */
            total_cal_cycles     = 0,    /* Total calibration cycles         */
            cur_depth            = 0,    /* Entry depth in queue             */
            start_time,                  /* Start time of fuzz               */
-           grads_last;
-static u32 rand_cnt;                    /* Random number counter            */
+           grads_last;                  /* Time sinmce we last got gradients*/
+           total_cal_us = 0,            /* Total calibration time (us)      */
+           total_execs;                 /* Total number of execs            */
 
-/* default setting, will be change according to different file length */
-int num_index[14] = {0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
+static volatile u8 stop_soon,           /* Ctrl-C pressed?                  */
+                   child_timed_out,     /* Traced process timed out?        */
+                   clear_screen = 1;    /* Window resized?                  */
+
+static u8 log_msg_buf[2048],            /* Buffer for log information       */
+          not_on_tty,                   /* Stdout is not tty                */
+          term_too_small,               /* Is the terminal too small?       */
+          *use_banner,                  /* Display banner                   */
+          *stage_name = "init";         /* Name of the current fuzz stage   */
+
+static u32 queue_cycle = 0,             /* Counting fuzzed cycles           */
+           stats_update_freq = 1,       /* Stats update frequency (execs)   */
+           rand_cnt;                    /* Random number counter            */
+
+size_t len=0;                           /* Maximum file length for every mutation */
+
+static struct queue *queue_havoc;       /* Queue for muation in havoc stage */
+
+struct file_container *file_container;  /* Store file list of Fuzz          */
 
 enum {
   /* 00 */ FAULT_NONE,
