@@ -274,6 +274,15 @@
 /* Error-checking versions of read() and write() that call RPFATAL() as
    appropriate. */
 
+/*Art*/
+
+#define ELMLOGO() SAYF(cBRI " \
+    __________  ___\n \
+   / __/ __/  |/  /\n \
+  / _// _// /|_/ / \n \
+ /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
+        \n\n" cRST);
+
 #define ck_write(fd, buf, len, fn) do { \
     u32 _len = (len); \
     s32 _res = write(fd, buf, _len); \

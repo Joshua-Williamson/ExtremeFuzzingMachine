@@ -2748,16 +2748,30 @@ static void show_stots(void) {
   fflush(0);
 }
 
+static void usage(u8* argv0) {
+  SAYF("\n efm-fuzz [ options ] -- /path/to/fuzzed_app -fuzzed -app -args\n\n"
+
+       "Required parameters:\n\n"
+
+       "  -i dir        - input directory with test cases\n"
+       "  -o dir        - output directory for fuzzer findings\n\n"
+
+       "Optional: \n\n"
+       "  -m megs       - memory limit for child process \n"
+       "  -d            - disables auto-lanuching python neural net module, launch seperately for debugging.\n\n"     
+ 
+       "For additional tips, please consult the README.\n\n"
+
+       );
+
+  exit(1);
+
+}
+
 
 void main(int argc, char *argv[]) {
   int opt;
-  //TODO: put aftwork in another file
-  SAYF(cBRI " \
-    __________  ___\n \
-   / __/ __/  |/  /\n \
-  / _// _// /|_/ / \n \
- /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
-        \n\n" cRST);
+  ELMLOGO();
   while ((opt = getopt(argc, argv, "+i:o:d:m:")) > 0)
 
     switch (opt) {
@@ -2810,8 +2824,10 @@ void main(int argc, char *argv[]) {
       
 
     default:
-      WARNF("no manual...");
+      usage(argv[0]);
     }
+
+  if (optind == argc || !in_dir || !out_dir) usage(argv[0]);
 
   set_havoc_template(in_dir);
   setup_signal_handlers();

@@ -3,6 +3,7 @@ neuzz
 seeds/.cur_input
 log_fuzz
 *.pyc
+efm-fuzz
 
 # Binaries produced by "make".
 afl-analyze
