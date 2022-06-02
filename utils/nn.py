@@ -15,10 +15,10 @@ import numpy as np
 from collections import Counter
 
 import sysv_ipc as ipc
-from utils.flow import FlowBuilder
+from flow import FlowBuilder
 import torch
 from torch.autograd import Variable
-from utils.TorchELM import pseudoInverse 
+from TorchELM import pseudoInverse 
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
@@ -83,7 +83,7 @@ def process_data_parallel():
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+                out = call(['../utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -151,7 +151,7 @@ def reduce_variable_files():
     for f in minimise_seed_list:
         outfile = "./seeds/"+f.split('/')[-1]+'min'
         try:
-            out = call(['timeout','10s','./utils/afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
+            out = call(['timeout','10s','../utils/afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -240,11 +240,6 @@ def process_data_init():
 
     # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
     os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
-    os.path.isdir("./havoc_seeds/") or os.makedirs("./havoc_seeds")
-    os.path.isdir("./vari_seeds/") or os.makedirs("./vari_seeds")
-    os.path.isdir("./crashes/") or os.makedirs("./crashes")
-    os.path.isdir("./hangs/") or os.makedirs("./hangs")
-    os.path.isdir("./nocov/") or os.makedirs("./nocov")
     nocov_list=glob.glob('./nocov/*')
 
     # obtain raw bitmaps
@@ -261,7 +256,7 @@ def process_data_init():
                 raise NotImplementedError
                 out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
             else:
-                out = call(['./utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
+                out = call(['../utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
@@ -549,6 +544,7 @@ def update_shm_buff():
 
 def setup_server():
     global shm 
+
     #Initalise server config
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     #Such that the OS releases the port quicker for rapid rerunning
@@ -561,6 +557,7 @@ def setup_server():
     print("Waiting for neuzz engine")
     conn, addr = sock.accept()
     print('Connected by neuzz engine ' + str(addr))
+    os.chdir(args.out_dir)
     shm = ipc.SharedMemory(ipc.ftok("/tmp", 6667,silence_warning = True), 0, 0) 
     shm.attach(0,0)
     t0=time.time()
@@ -623,6 +620,12 @@ if __name__ == '__main__':
                         help='Suppress printing messages, send to log instead',
                         default=False,
                         action='store_true')
+
+    parser.add_argument('-o',
+                        '--out-dir',
+                        help='working dir for fuzzing',
+                        type=str,
+                        default=None)
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args

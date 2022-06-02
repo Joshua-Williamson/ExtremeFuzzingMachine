@@ -486,7 +486,7 @@ void init_forkserver(char** argv) {
   int status;
   int rlen;
   char* cwd = getcwd(NULL, 0);
-  out_file = alloc_printf("%s/%s/.cur_input",cwd, out_dir);
+  out_file = alloc_printf("%s/.cur_input",cwd);
   OKF("Spinning up the fork server...");
 
   if (pipe(st_pipe) || pipe(ctl_pipe)) WARNF("pipe() failed");
@@ -697,7 +697,7 @@ void start_nn_mod(void){
   nnforkexec_pid = fork();
 
   if (nnforkexec_pid == 0){
-      execlp("python","python","nn.py", "-q",target_path);
+      execlp("python","python","./utils/nn.py", "-q","-o",out_dir,target_path);
       exit(127);
   
   }
@@ -718,6 +718,50 @@ void check_nn_alive(void){
   }
 }
 
+int remove_directory(const char *path) {
+   DIR *d = opendir(path);
+   size_t path_len = strlen(path);
+   int r = -1;
+
+   if (d) {
+      struct dirent *p;
+
+      r = 0;
+      while (!r && (p=readdir(d))) {
+          int r2 = -1;
+          char *buf;
+          size_t len;
+
+          /* Skip the names "." and ".." as we don't want to recurse on them. */
+          if (!strcmp(p->d_name, ".") || !strcmp(p->d_name, ".."))
+             continue;
+
+          len = path_len + strlen(p->d_name) + 2; 
+          buf = malloc(len);
+
+          if (buf) {
+             struct stat statbuf;
+
+             snprintf(buf, len, "%s/%s", path, p->d_name);
+             if (!stat(buf, &statbuf)) {
+                if (S_ISDIR(statbuf.st_mode))
+                   r2 = remove_directory(buf);
+                else
+                   r2 = unlink(buf);
+             }
+             free(buf);
+          }
+          r = r2;
+      }
+      closedir(d);
+   }
+
+   if (!r)
+      r = rmdir(path);
+
+   return r;
+}
+
 void setup_dirs_fds(void) {
 
   char* tmp;
@@ -725,12 +769,37 @@ void setup_dirs_fds(void) {
 
   ACTF("Setting up output directories...");
 
+  remove_directory(out_dir);
 
   if (mkdir(out_dir, 0700)) {
 
     if (errno != EEXIST) WARNF("Unable to create %s", out_dir);
 
   }
+  
+  tmp = alloc_printf("%s/seeds", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/vari_seeds", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/havoc_seeds", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/hangs", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/crashes", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/nocov", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
 
   /* Generally useful file descriptors. */
 
@@ -864,7 +933,7 @@ void detect_file_args(char** argv) {
 /* set up target path */ 
 void setup_targetpath(char * argvs){
     char* cwd = getcwd(NULL, 0);
-    log_pth = alloc_printf("%s/%s", cwd, "log_fuzz");
+    log_pth = alloc_printf("%s/%s/%s", cwd, out_dir, "log_fuzz");
     target_path = alloc_printf("%s/%s", cwd, argvs);
     argvs = target_path;
 }
@@ -1719,7 +1788,7 @@ void gen_mutate() {
         else
           out_buf1[loc[index]] = mut_val;
       }
-      execute_target_program(out_buf1, len, out_dir);
+      execute_target_program(out_buf1, len, "seeds");
     }
 
     /* low direction mutation(up to 255) */
@@ -1733,7 +1802,7 @@ void gen_mutate() {
         else
           out_buf2[loc[index]] = mut_val;
       }
-      execute_target_program(out_buf2, len, out_dir);
+      execute_target_program(out_buf2, len, "seeds");
     }
   }
 
@@ -1752,7 +1821,7 @@ void gen_mutate() {
     cut_len = choose_block_len(len - 1 - del_loc);
     memcpy(out_buf1, out_buf, del_loc);
     memcpy(out_buf1 + del_loc, out_buf + del_loc + cut_len, len - del_loc - cut_len);
-    execute_target_program(out_buf1, len - cut_len, out_dir);
+    execute_target_program(out_buf1, len - cut_len, "seeds");
 
     /* random insertion at a critical offset */
     cut_len = choose_block_len(len - 1);
@@ -2001,7 +2070,7 @@ void afl_havoc_stage(struct queue_entry* q) {
       if (temp_len > len)
         m_fn = alloc_printf("%s/id_%d_%06d_havoc", "./havoc_seeds", round_cnt, havoc_cnt++);
       else
-        m_fn = alloc_printf("%s/id_%d_%06d_havoc", out_dir, round_cnt, havoc_cnt++);
+        m_fn = alloc_printf("%s/id_%d_%06d_havoc", "seeds", round_cnt, havoc_cnt++);
 
       int m_fd = open(m_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
       ck_write(m_fd, havoc_out_buf, temp_len, m_fn);
@@ -2041,7 +2110,7 @@ void dry_run(char *dir) {
       if (tmp != entry->d_name) {
         fn = entry->d_name;
         /* add dry run seeds to file container */
-        char* init_seed = alloc_printf("%s/%s", out_dir, entry->d_name);
+        char* init_seed = alloc_printf("%s/%s", "seeds", entry->d_name);
         add_file_to_container(file_container, init_seed);
 
         int fd_tmp = open(entry->d_name, O_RDONLY);
@@ -2151,7 +2220,7 @@ void copy_seeds(char *in_dir, char *out_dir) {
     if (strcmp(".", de->d_name) == 0 || strcmp("..", de->d_name) == 0)
       continue;
     sprintf(src, "%s/%s", in_dir, de->d_name);
-    sprintf(dst, "%s/%s", out_dir, de->d_name);
+    sprintf(dst, "%s/%s/%s", out_dir, "seeds", de->d_name);
     copy_file(src, dst);
   }
   closedir(dp);
@@ -2314,7 +2383,7 @@ void start_fuzz(int f_len) {
   len = f_len;
   /* dry run initial seeds*/
   /* Use log functions to message from here because the screen will be up*/
-  dry_run(out_dir);
+  dry_run("seeds");
 
   /* start fuzz */
   char buf[16];
@@ -2656,7 +2725,7 @@ static void show_stots(void) {
   sprintf(tmp, "%s total, %s unique", DI(total_crashes),DI(unique_crashes)); 
   SAYF(bSTG bV bSTOP "  Mapping time : " cRST "%-15s" bSTG bV bSTOP "    Crashes : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[5], tmp);
   sprintf(tmp, "%s total, %s unique", DI(total_tmout),DI(unique_tmout)); 
-  SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "goupfasterthnprogtmt " bSTG bV bSTOP"\n",nn_arr[6], tmp);
+  SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[6], tmp);
   SAYF(bSTG bV bSTOP " Training time : " cRST "%-15s" bSTG bV bSTOP " Edge count : " cRST "%-21d" bSTG bV bSTOP"\n",nn_arr[7], t_bytes);
   SAYF(bSTG bLB bH30 bH2 bX bSTOP cCYA " Log messages" bSTG bH10 bH2 bH2 bHB bH5 bH2 bRB bSTOP "\n");
   if (log_warn > 10000) sprintf(tmp, "10000(+)!");
@@ -2752,6 +2821,7 @@ void main(int argc, char *argv[]) {
   copy_seeds(in_dir, out_dir);
   start_nn_mod();
   check_nn_alive();
+  chdir(out_dir);
   init_forkserver(argv + optind);
   srand(time(NULL));
   fix_up_banner(argv[optind]);
