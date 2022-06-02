@@ -741,7 +741,7 @@ void setup_shm(void) {
 
 /* Starts nn server */
 
-void start_nn_mod(void){
+void start_nn_mod(char** argv){
 
   ACTF("Spinning up neural network server");
 
@@ -750,7 +750,7 @@ void start_nn_mod(void){
   nnforkexec_pid = fork();
 
   if (nnforkexec_pid == 0){
-      execlp("python","python","./utils/nn.py", "-q","-o",out_dir,target_path);
+      execlp("python","python","./utils/nn.py", "-q","-o",out_dir,target_path,argv);
       exit(127);
   
   }
@@ -2955,7 +2955,7 @@ void main(int argc, char *argv[]) {
   setup_targetpath(argv[optind]);
   check_crash_handling();
   copy_seeds(in_dir, out_dir);
-  start_nn_mod();
+  start_nn_mod(argv + optind);
   check_nn_alive();
   OKF("Neural network server up and running");
   chdir(out_dir);
