@@ -279,6 +279,7 @@ enum {
    In essence, the instrumentation allows us to skip execve(), and just keep
    cloning a stopped child. So, we just execute once, and then send commands
    through a pipe. The other part of this logic is in afl-as.h. */
+
 void setup_stdio_file(void) {
 
   char* fn = alloc_printf("%s/.cur_input", out_dir);
@@ -295,6 +296,7 @@ void setup_stdio_file(void) {
 
 /* Count the number of non-255 bytes set in the bitmap. Used strictly for the
    status screen, several calls per second or so. */
+
 #define FF(_b)  (0xff << ((_b) << 3))
 
 static u32 count_bytes(u8* mem) {
@@ -318,6 +320,8 @@ static u32 count_bytes(u8* mem) {
   return ret;
 
 }
+
+/* Same as above but used for virgin bitmap */
 
 static u32 count_non_255_bytes(u8* mem) {
 
@@ -344,7 +348,11 @@ static u32 count_non_255_bytes(u8* mem) {
 
 }
 
+/* Keep the compiler happpy */
+
 static void show_stots(void);
+
+/* Get time */
 
 static u64 get_cur_time(void) {
 
@@ -470,6 +478,8 @@ static void handle_timeout(int sig) {
 
 }
 
+/* Clears screen if terminal moves */
+
 static void handle_resize(int sig) {
   clear_screen = 1;
 }
@@ -512,6 +522,7 @@ void setup_signal_handlers(void) {
 
 }
 
+/* Fork server that we'll be executing everything on */
 
 void init_forkserver(char** argv) {
 
@@ -678,6 +689,7 @@ static void remove_shm(void) {
 }
 
 /* Configure shared memory and virgin_bits. This is called at startup. */
+/* Also configures a shared memory region to the python mopdule so we can share stats eaily */
 
 void setup_shm(void) {
 
@@ -724,6 +736,8 @@ void setup_shm(void) {
 
 }
 
+/* Starts nn server */
+
 void start_nn_mod(void){
 
   if (!start_nn) return;
@@ -736,6 +750,8 @@ void start_nn_mod(void){
   
   }
 }
+
+/* Checks server is still alive every now and then */
 
 void check_nn_alive(void){
 
@@ -751,6 +767,8 @@ void check_nn_alive(void){
           "the python module seperately with a debugger.");
   }
 }
+
+/* Helper to remove the working directory at start up */
 
 int remove_directory(const char *path) {
    DIR *d = opendir(path);
@@ -795,6 +813,8 @@ int remove_directory(const char *path) {
 
    return r;
 }
+
+/* Sets up file descriptors to send stuff to the void, makes dirs in working dir */
 
 void setup_dirs_fds(void) {
 
@@ -845,6 +865,8 @@ void setup_dirs_fds(void) {
 
 }
 
+/* Very very important, makes sure that crashes dont get interpreted at timeouts */
+
 static void check_crash_handling(void) {
 
   /* This is Linux specific, but I don't think there's anything equivalent on
@@ -876,6 +898,8 @@ static void check_crash_handling(void) {
 
 }
 
+/* Size of file */
+
 int fsize(FILE *fp){
     int prev=ftell(fp);
     fseek(fp, 0L, SEEK_END);
@@ -883,6 +907,8 @@ int fsize(FILE *fp){
     fseek(fp,prev,SEEK_SET); //go back to where we were
     return sz;
 }
+
+/* Sets granularity of mutations as well as havoc index's */
 
 int set_havoc_template(char *dir){
   DIR *dp;
@@ -965,6 +991,7 @@ void detect_file_args(char** argv) {
 }
 
 /* set up target path */ 
+
 void setup_targetpath(char * argvs){
     char* cwd = getcwd(NULL, 0);
     log_pth = alloc_printf("%s/%s/%s", cwd, out_dir, "log_fuzz");
@@ -1490,6 +1517,18 @@ void parse_array(char * str, int * array){
 
     return;
 }
+
+/* So theres around 1024 bytes to write messages in the shared memory between the nn module */
+/* each message is a 40 byte region */
+/* status = nn_arrp[0] */
+/* last accuracy = nn_arrp[1] */
+/* bitmap size = nn_arrp[2] */
+/* corpus size = nn_arrp[3] */
+/* nocov size = nn_arrp[4] */
+/* last mapping time = nn_arrp[5] */
+/* last reducing time = nn_arrp[6] */
+/* last training time = nn_arrp[7] */
+/* num grad = nn_arrp[8] */
 
 void set_up_nn_pointers(char * str, char ** array){
     
@@ -2405,7 +2444,9 @@ void start_fuzz(int f_len) {
       }
 
   ACTF("start of the fuzzing module");
-  /* set up buffer */
+
+  /* set up buffer, I know this is a bad idea*/
+
   out_buf = malloc(10000);
   if (!out_buf)
     WARNF("malloc failed");
@@ -2423,6 +2464,7 @@ void start_fuzz(int f_len) {
   if (!queue_havoc) WARNF("init queue failed");
   
   len = f_len;
+
   /* dry run initial seeds*/
   /* Use log functions to message from here because the screen will be up*/
   dry_run("seeds");
@@ -2744,41 +2786,74 @@ static void show_stots(void) {
 #define SP20    SP10 SP10
 
   /* Lord, forgive me this. */
+  /* The actual screen, I wish I could convey how hard this was to make even if I did just copy afl*/
 
+  /* Top box time */
   SAYF(SET_G1 SP10 bSTG bLT bH bSTOP cBCYA "Time " bSTG bH30 bH10 bH2 bRT bSTOP"\n");
+
   SAYF(bSTART SP10 bV bSTOP "   run time : " cRST "%-33s " bSTG bV bSTOP"\n",
        DTD(cur_ms, start_time));
+       
   SAYF(bSTART SP10 bV bSTOP " last grads : " cRST "%-33s " bSTG bV bSTOP"\n",
        DTD(cur_ms, grads_last));
+  
+  /* Middle Box */
   SAYF(bSTG bLT bH5 bH2 bH2 bHT bH bSTOP cLGN "Neural Net Engine " bSTG bH5 bHB bH bSTOP cPIN "Fuzzer " bSTG bH10 bH5 bHT bH2 bH2 bH5 bRT bSTOP"\n");
+
   SAYF(bSTG bV bSTOP "       Status : " cRST "%-18s" bSTG bV bSTOP " Rounds done : " cRST "%-18d" bSTG bV bSTOP"\n",nn_arr[0],round_cnt);
+  
   sprintf(tmp, "%s%%", nn_arr[1]);
+
   SAYF(bSTG bV bSTOP " training acc : " cRST "%-18s" bSTG bV bSTOP,tmp);
+
   sprintf(tmp, "%s/sec", DF(avg_exec));
+
   SAYF("  Exec speed : " bSTG bSTOP cRST "%-18s" bSTG bV bSTOP"\n",tmp);
+
   SAYF(bSTG bVR bH bSTOP cLGX "data " bSTG bH10 bH5 bH2 bHB bH bSTOP cPIX "state " bSTG bH2 bH bHT bH30 bH2 bH bVL bSTOP "\n");
+
   SAYF(bSTG bV bSTOP " Bitmap size : " cRST "%-8s" bSTG bV bSTOP "    Stage : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[2], stage_name);
+
   sprintf(tmp, "%s/%s (%s%%)", DI(stage_cnt),DI(stage_tot),(stage_tot == 0 ? "---" : DI(stage_cnt * 100 /stage_tot))); 
+
   SAYF(bSTG bV bSTOP " Corpus size : " cRST "%-8s" bSTG bV bSTOP " Progress : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[3],tmp);
+
+  /* Stops it turning into when you move a image 1mm on word (if seed is a bit too long)*/
   if (strlen(fn) > 28) sprintf(tmp, "%.28s ..." , fn );
+  
   else sprintf(tmp, "%s" , fn );
+
   SAYF(bSTG bV bSTOP "  Nocov size : " cRST "%-8s" bSTG bV bSTOP "     Seed : " cRST "%-32s" bSTG bV bSTOP"\n",nn_arr[4],tmp);
+
   SAYF(bSTG bVR bH bSTOP cLGX "module load " bSTG bH10 bHT bH bH2 bH5 bHB bH bSTOP cPIX "findings " bSTG bH20 bH5 bVL bSTOP "\n");
+
   sprintf(tmp, "%s total, %s unique", DI(total_crashes),DI(unique_crashes)); 
+  
   SAYF(bSTG bV bSTOP "  Mapping time : " cRST "%-15s" bSTG bV bSTOP "    Crashes : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[5], tmp);
+
   sprintf(tmp, "%s total, %s unique", DI(total_tmout),DI(unique_tmout)); 
+
   SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[6], tmp);
+
   SAYF(bSTG bV bSTOP " Training time : " cRST "%-15s" bSTG bV bSTOP " Edge count : " cRST "%-21d" bSTG bV bSTOP"\n",nn_arr[7], t_bytes);
+
+  /*LAST BOX */
   SAYF(bSTG bLB bH30 bH2 bX bSTOP cCYA " Log messages" bSTG bH10 bH2 bH2 bHB bH5 bH2 bRB bSTOP "\n");
+
   if (log_warn > 10000) sprintf(tmp, "10000(+)!");
+
   else sprintf(tmp, "%s" , DI(log_warn));
+
   SAYF(bSTG SP SP20 SP10 SP2 bV bSTOP cYEL " [!]" cRST" %-7s", tmp);
+
   if (log_fatal > 10000) sprintf(tmp, "10000(+)!");
+
   else sprintf(tmp, "%s" , DI(log_fatal));
+
   SAYF(SP2 cLRD "[-] " cRST "%-7s" bSTG SP2 bV bSTOP "\n", tmp);
+
   SAYF(bSTG SP SP20 SP10 SP2 bLB bH20 bH5 bH2 bRB bSTOP "\n");
  
-
   fflush(0);
 }
 
@@ -2801,7 +2876,6 @@ static void usage(u8* argv0) {
   exit(1);
 
 }
-
 
 void main(int argc, char *argv[]) {
   int opt;
