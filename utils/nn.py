@@ -10,7 +10,6 @@ import time
 import random
 import socket
 import subprocess
-from turtle import up, update
 import numpy as np
 from collections import Counter
 
@@ -625,7 +624,7 @@ if __name__ == '__main__':
                         '--out-dir',
                         help='working dir for fuzzing',
                         type=str,
-                        default=None)
+                        default="")
 
     parser.add_argument('target', nargs=argparse.REMAINDER)
     global args

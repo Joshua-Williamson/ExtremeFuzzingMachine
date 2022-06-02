@@ -376,7 +376,7 @@ static void handle_stop_sig(int sig) {
   if (forksrv_pid > 0) kill(forksrv_pid, SIGKILL);
   if ((start_nn) || (nnforkexec_pid > 0)) kill(nnforkexec_pid, SIGKILL);
   OKF("total execs %ld edge coverage %d.", total_execs,(int)(count_non_255_bytes(virgin_bits)));
-  SAYF(CURSOR_SHOW cLRD "\n\n+++ Testing aborted %s +++\n" cRST,
+  SAYF(bSTOP CURSOR_SHOW cLRD "\n\n+++ Testing aborted %s +++\n" cRST,
        stop_soon == 2 ? "programmatically" : "by user");
 
   free(out_buf);
