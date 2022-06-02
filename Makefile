@@ -12,6 +12,6 @@ clean:
 
 afl-utils:
 	$(MAKE) -C AFL_utils
-	cp AFL_utils/afl-tmin ./utils/
+	cp AFL_utils/efm-tmin ./utils/
 	cp AFL_utils/afl-showmap ./utils/
 	cp AFL_utils/afl-gcc .

@@ -151,7 +151,7 @@ def reduce_variable_files():
     for f in minimise_seed_list:
         outfile = "./seeds/"+f.split('/')[-1]+'min'
         try:
-            out = call(['timeout','10s','../utils/afl-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
+            out = call(['timeout','10s','../utils/efm-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
         except subprocess.CalledProcessError as e:
             if not warning:
                 print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
