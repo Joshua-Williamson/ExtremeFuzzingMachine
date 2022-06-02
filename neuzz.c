@@ -1649,6 +1649,7 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
       free(mut_fn);
       close(mut_fd);
       unique_crashes++;
+      total_crashes++;
     }
     else total_crashes++;
   }
@@ -1661,6 +1662,7 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
       free(mut_fn);
       close(mut_fd);
       unique_tmout++;
+      total_tmout++;
     }
     else total_tmout++;
   }
@@ -1704,6 +1706,7 @@ void execute_target_program_vari(char* out_buf, size_t length, char* out_dir) {
       free(mut_fn);
       close(mut_fd);
       unique_crashes++;
+      total_crashes++;
     }
     else total_crashes++;
   }
@@ -1716,6 +1719,7 @@ void execute_target_program_vari(char* out_buf, size_t length, char* out_dir) {
       free(mut_fn);
       close(mut_fd);
       unique_tmout++;
+      total_tmout++;
     }
     else total_tmout++;
   }
@@ -2049,6 +2053,7 @@ void afl_havoc_stage(struct queue_entry* q) {
           free(mut_fn);
           close(mut_fd);
           unique_crashes++;
+          total_crashes++;
         }
         else total_crashes++;
       }
@@ -2060,6 +2065,7 @@ void afl_havoc_stage(struct queue_entry* q) {
           free(mut_fn);
           close(mut_fd);
           unique_tmout++;
+          total_tmout++;
         }
       else total_tmout++;
       }
@@ -2133,6 +2139,7 @@ void dry_run(char *dir) {
             free(mut_fn);
             close(mut_fd);
             unique_crashes++;
+            total_crashes++;
           }
           else total_crashes++;
         }
@@ -2145,6 +2152,7 @@ void dry_run(char *dir) {
             free(mut_fn);
             close(mut_fd);
             unique_tmout++;
+            total_tmout++;
           }
           else total_tmout++;
         }
