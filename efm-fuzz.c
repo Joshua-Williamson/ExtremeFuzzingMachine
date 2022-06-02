@@ -991,6 +991,8 @@ void detect_file_args(char** argv) {
 
   }
 
+  free(cwd);
+
 }
 
 /* set up target path */ 
