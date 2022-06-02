@@ -202,7 +202,7 @@ static int out_fd,                      /* Persistent fd for out_file       */
            mut_cnt = 0,                 /* Total mutation counter           */
            havoc_cnt = 0;               /* Total mutation counter by havoc  */
 
-char *target_path;                      /* Path to target binary            */
+char *target_path,                      /* Path to target binary            */
      *trace_bits,                       /* SHM with instrumentation bitmap  */
      *nn_stats,                         /* Pointer to NN shared memory stats*/
      *fn = "-",                         /* Current file                     */
@@ -210,22 +210,22 @@ char *target_path;                      /* Path to target binary            */
      *out_file,                         /* File to fuzz, if any             */
      *out_dir,                          /* Working & output directory       */
      *log_pth,                          /* Path for log file                */
-     *nn_arr[9];                        /* Points shared mem stats segments */
-
-char virgin_bits[MAP_SIZE],             /* Regions yet untouched by fuzzing */
-     crash_bits[MAP_SIZE],              /* Regions yet untouched by crashing*/
-     tmout_bits[MAP_SIZE];              /* Regions yet untouched by tmouting*/
+     *nn_arr[9],                        /* Points shared mem stats segments */
      *out_buf,                          /* Bufs for mutation operations     */ 
      *out_buf1,                         /* Bufs for mutation operations     */
      *out_buf2,                         /* Bufs for mutation operations     */
      *out_buf3;                         /* Bufs for mutation operations     */
+
+char virgin_bits[MAP_SIZE],             /* Regions yet untouched by fuzzing */
+     crash_bits[MAP_SIZE],              /* Regions yet untouched by crashing*/
+     tmout_bits[MAP_SIZE];              /* Regions yet untouched by tmouting*/
 
 static u64 total_bitmap_size    = 0,    /* Total bit count for all bitmaps  */
            total_bitmap_entries = 0,    /* Number of bitmaps counted        */
            total_cal_cycles     = 0,    /* Total calibration cycles         */
            cur_depth            = 0,    /* Entry depth in queue             */
            start_time,                  /* Start time of fuzz               */
-           grads_last;                  /* Time sinmce we last got gradients*/
+           grads_last,                  /* Time sinmce we last got gradients*/
            total_cal_us = 0,            /* Total calibration time (us)      */
            total_execs;                 /* Total number of execs            */
 
@@ -235,8 +235,9 @@ static volatile u8 stop_soon,           /* Ctrl-C pressed?                  */
 
 static u8 log_msg_buf[2048],            /* Buffer for log information       */
           not_on_tty,                   /* Stdout is not tty                */
-          term_too_small,               /* Is the terminal too small?       */
-          *use_banner,                  /* Display banner                   */
+          term_too_small;               /* Is the terminal too small?       */
+
+static u8 *use_banner,                  /* Display banner                   */
           *stage_name = "init";         /* Name of the current fuzz stage   */
 
 static u32 queue_cycle = 0,             /* Counting fuzzed cycles           */
@@ -693,6 +694,8 @@ static void remove_shm(void) {
 
 void setup_shm(void) {
 
+  ACTF("Setting up shared memory buffers");
+
   char* shm_str;
 
   memset(virgin_bits, 255, MAP_SIZE);
@@ -739,6 +742,8 @@ void setup_shm(void) {
 /* Starts nn server */
 
 void start_nn_mod(void){
+
+  ACTF("Spinning up neural network server");
 
   if (!start_nn) return;
 
@@ -940,8 +945,7 @@ int set_havoc_template(char *dir){
     havoc_blk_medium = 2048;
     havoc_blk_small = 1024;
   }
-  OKF("num_index %d %d small %d medium %d large %d", num_index[12], num_index[13], havoc_blk_small, havoc_blk_medium, havoc_blk_large);
-  OKF("mutation len: %ld", len);
+  OKF("Setting up mutation templates, max file size: %ld", len);
 }
 
 /* Detect @@ in args. */
@@ -2953,15 +2957,23 @@ void main(int argc, char *argv[]) {
   copy_seeds(in_dir, out_dir);
   start_nn_mod();
   check_nn_alive();
+  OKF("Neural network server up and running");
   chdir(out_dir);
   init_forkserver(argv + optind);
   srand(time(NULL));
   fix_up_banner(argv[optind]);
   check_if_tty();
-  OKF("Ok, ready to go!");
-  sleep(4);
+
+  OKF("Ok, all set up and ready to go:\n\n"
+
+      cGRA "       Memory limit : " cRST "%d Mb\n"
+      cGRA "      Timeout limit : " cRST "%d ms\n", mem_limit, exec_tmout); 
+
+  sleep(5);
   start_time=get_cur_time();
+
   start_fuzz(len);
+
   OKF("total execs %ld edge coverage %d.", total_execs, count_non_255_bytes(virgin_bits));
   return;
 }
