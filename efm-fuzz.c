@@ -928,6 +928,7 @@ int set_havoc_template(char *dir){
     if (entry->d_type == DT_REG){
       char* init_seed = alloc_printf("%s/%s", dir, entry->d_name);
       FILE *fl=fopen(init_seed,"r");
+      free(init_seed);
       tmp = fsize(fl);
       if (tmp > len) len=tmp;
     }
@@ -989,8 +990,6 @@ void detect_file_args(char** argv) {
     i++;
 
   }
-
-  free(cwd); /* not tracked */
 
 }
 
@@ -2195,6 +2194,7 @@ void dry_run(char *dir) {
         /* add dry run seeds to file container */
         char* init_seed = alloc_printf("%s/%s", "seeds", entry->d_name);
         add_file_to_container(file_container, init_seed);
+        free(init_seed);
 
         int fd_tmp = open(entry->d_name, O_RDONLY);
         if (fd_tmp == -1)
