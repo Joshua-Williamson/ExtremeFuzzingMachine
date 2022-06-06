@@ -211,6 +211,7 @@ char *target_path,                      /* Path to target binary            */
      *out_dir,                          /* Working & output directory       */
      *log_pth,                          /* Path for log file                */
      *nn_arr[9],                        /* Points shared mem stats segments */
+     **nn_args,                        /* Array of args to pass to nn mod  */
      *out_buf,                          /* Bufs for mutation operations     */ 
      *out_buf1,                         /* Bufs for mutation operations     */
      *out_buf2,                         /* Bufs for mutation operations     */
@@ -743,6 +744,18 @@ void setup_shm(void) {
 
 void start_nn_mod(char** argv){
 
+  char python[7]="python";
+  char nn_path[14]="./utils/nn.py";
+  char quiet[3]="-q";
+  char out[3]="-o";
+
+  nn_args[0]=&python;
+  nn_args[1]=&nn_path;
+  nn_args[2]=&quiet;
+  nn_args[3]=&out;
+  nn_args[4]=out_dir;
+  nn_args[5]=target_path;
+
   ACTF("Spinning up neural network server");
 
   if (!start_nn) return;
@@ -750,9 +763,9 @@ void start_nn_mod(char** argv){
   nnforkexec_pid = fork();
 
   if (nnforkexec_pid == 0){
-      execlp("python","python","./utils/nn.py", "-q","-o",out_dir,target_path,argv);
+      execvp(&python,nn_args);
       exit(127);
-  
+
   }
 }
 
@@ -951,10 +964,11 @@ int set_havoc_template(char *dir){
 
 /* Detect @@ in args. */
 
-void detect_file_args(char** argv) {
+void detect_file_args(int argc, char** argv) {
 
   int i = 0;
   char* cwd = getcwd(NULL, 0);
+  nn_args = malloc(20*(argc + 7));
 
   if (!cwd) WARNF("getcwd() failed");
 
@@ -984,7 +998,11 @@ void detect_file_args(char** argv) {
       *aa_loc = '@';
 
       if (out_file[0] != '/') free(aa_subst);
+      nn_args[i+6]=0x0;
 
+    }
+    else{
+      nn_args[i+6]=argv[i];
     }
 
     i++;
@@ -2953,7 +2971,7 @@ void main(int argc, char *argv[]) {
   init_count_class16();
   setup_dirs_fds();
   if (!out_file) setup_stdio_file();
-  detect_file_args(argv + optind + 1);
+  detect_file_args(argc, argv + optind + 1);
   setup_targetpath(argv[optind]);
   check_crash_handling();
   copy_seeds(in_dir, out_dir);
