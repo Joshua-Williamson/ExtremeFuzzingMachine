@@ -767,6 +767,32 @@ void start_nn_mod(char** argv){
       exit(127);
 
   }
+  free(nn_args);
+}
+
+static void write_results(char * out_file) {
+
+  s32 fd;
+  u32 i, ret = 0;
+
+  unlink(out_file); /* Ignore errors */
+  fd = open(out_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) PFATAL("Unable to create '%s'", out_file);
+
+  FILE* f = fdopen(fd, "w");
+
+  if (!f) PFATAL("fdopen() failed");
+
+  for (i = 0; i < MAP_SIZE; i++) {
+
+    if (!trace_bits[i]) continue;
+    ret++;
+
+    fprintf(f, "%06u:%u\n", i, trace_bits[i]);
+
+  }
+  fclose(f);
+
 }
 
 /* Checks server is still alive every now and then */
@@ -870,6 +896,10 @@ void setup_dirs_fds(void) {
   free(tmp);
 
   tmp = alloc_printf("%s/nocov", out_dir);
+  if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
+  free(tmp);
+
+  tmp = alloc_printf("%s/edges", out_dir);
   if (mkdir(tmp, 0700)) PFATAL("Unable to create '%s'", tmp);
   free(tmp);
 
@@ -1767,6 +1797,9 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
   int ret = has_new_bits(virgin_bits);
   if (ret == 2) {
     char *mut_fn = alloc_printf("%s/id_%d_%06d_cov", out_dir, round_cnt, mut_cnt++);
+    char *mut_nm = alloc_printf("%s/id_%d_%06d_cov", "./edges", round_cnt, mut_cnt);
+    write_results(mut_nm);
+    free(mut_nm);
     add_file_to_container(file_container, mut_fn);
     int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ck_write(mut_fd, out_buf, length, mut_fn);
@@ -1775,6 +1808,9 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
   }
   else if (ret == 1) {
     char *mut_fn = alloc_printf("%s/id_%d_%06d", out_dir, round_cnt, mut_cnt++);
+    char *mut_nm = alloc_printf("%s/id_%d_%06d", "./edges", round_cnt, mut_cnt);
+    write_results(mut_nm);
+    free(mut_nm);
     add_file_to_container(file_container, mut_fn);
     int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ck_write(mut_fd, out_buf, length, mut_fn);
@@ -1782,7 +1818,10 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
     close(mut_fd);
   }
   else if (write_nocov && rand() % 1000000 < nocov_statistic) {
-    char *mut_fn = alloc_printf("%s/id_%d_%06d_+nocov", "nocov", round_cnt, mut_cnt++);
+    char *mut_fn = alloc_printf("%s/id_%d_%06d_+nocov", "nocov", round_cnt, mut_cnt);
+    char *mut_nm = alloc_printf("%s/id_%d_%06d_+nocov", "./edges", round_cnt, mut_cnt);
+    write_results(mut_nm);
+    free(mut_nm);
     /*add_file_to_container(file_container, mut_fn); <--- do i want this?*/
     int mut_fd = open(mut_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ck_write(mut_fd, out_buf, length, mut_fn);
@@ -2254,6 +2293,10 @@ void dry_run(char *dir) {
           else total_tmout++;
         }
 
+        char *mut_nm = alloc_printf("%s/%s", "../edges", fn);
+        write_results(mut_nm);
+        free(mut_nm);
+
         stop_us = get_cur_time_us();
         total_cal_us = total_cal_us - start_us + stop_us;
         cnt = cnt + 1;
@@ -2406,6 +2449,9 @@ void fuzz_lop(char *grad_file, int sock) {
   OKFLOG("current cnt: %d, gen_mutate finished, starting havoc stage", queue_cycle);
   OKFLOG("gen_mutate use time %fs", difftime(tt2, tt1));
 
+  send(sock, "train", 5, 0);
+  OKFLOG("Train Signal");
+
   /* afl havoc stage */
   struct queue_entry* q_entry = queue_havoc->head->next;
 
@@ -2429,8 +2475,6 @@ void fuzz_lop(char *grad_file, int sock) {
   OKFLOG("havoc use time %fs", difftime(tt3, tt2));
   free(line);
   fclose(stream);
-  send(sock, "train", 5, 0);
-  OKFLOG("Train Signal");
   round_cnt++;
 }
 
