@@ -1,12 +1,19 @@
 # Extreme Fuzzing Machine (EFM): using Extreme Learning Machines for gradient guided fuzzing
 
 By Joshua Williamson. Any questions, please email me at 1joshua.williamson@gmail.com !
+
+
+<p float="left">
+  <img src="docs/start_up.jpg?raw=true" width="400" />
+  <img src="docs/screen.jpg?raw=true" width="400" /> 
+</p>
+
 ## Acknowledgements:
  This fuzzer is a modified and improved version of the fuzzer NEUZZ, developed by DongDongShe et. all: <br/>
  - Github: https://github.com/Dongdongshe/neuzz
  - Paper: https://arxiv.org/abs/1807.05620
 
-This repository also includes improvements developed by Wu et. al:  <br/>
+This repository also includes improvments developed by Wu et. al:  <br/>
 - Github: https://github.com/PoShaung/program-smoothing-fuzzing
 - Paper 1: http://zhangyuqun.com/publications/icse2022b.pdf
 - Paper 2: http://zhangyuqun.com/publications/icse2022a.pdf
@@ -33,7 +40,6 @@ For the easy way do: $ pip install -r requirements.txt
 $ pip install -r requirements.txt
 ```
 
-## Docker :
 ## Build :
 Build this repo by cloning and then:
 ```bash

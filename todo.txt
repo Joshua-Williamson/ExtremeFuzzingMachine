@@ -5,3 +5,10 @@ TODO:
  I have somehow broken the NN module by passing the args wrong a few commits ago. Need to fix.
 
  Whyb cant I seem to nest steer decorators with my own
+
+ why is timeout going up faster than it can possivly timeoput
+ do proper malloc for bufs in each case
+
+ requirements and docker
+
+ Add detailed whitepaper-esque thing
