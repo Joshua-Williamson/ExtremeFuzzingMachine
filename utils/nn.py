@@ -12,631 +12,346 @@ import socket
 import subprocess
 import numpy as np
 from collections import Counter
-
+from torch.autograd import Variable
+import torch
+from torch.utils.data import Dataset, DataLoader
 import sysv_ipc as ipc
 from flow import FlowBuilder
-import torch
-from torch.autograd import Variable
 from TorchELM import pseudoInverse 
+import utils
+import torch.nn.functional as F
 
 #Setting up ip and port for internal server
 HOST = '127.0.0.1'
 PORT = 12012
 
-round_cnt = 0
-# Choose a seed for random initilzation
-# seed = int(time.time())
+class Edge_Data(Dataset):
 
-#Fixed seed
-seed = 12
-np.random.seed(seed)
-random.seed(seed)
-# get binary argv
-argvv = sys.argv[1:]
+    """ 
+    Inherits from torch Dastasets and allows the edge information to be read into the 
+    training Torch models easily. Handles data curation and processing.
+    """
 
-def parse_executable():
-    global correspond_dict
+    def __init__(self, EFM_obj):
+        self.EFM=EFM_obj
+        self.seeds_list=[]
+        self.nocov_list=[]
+        self.vari_seed_list=[]
+        self.havoc_seed_list=[]
+        self.EFM.max_file_size=utils.get_max_seed_size('./seeds/')
+        self.mapped_seeds=[]
+        self.reduced_seeds=[]
+        self.reducing_blacklist=[]
+        self.bitmap = None
+        self.label=np.array([])
 
-    flow = FlowBuilder(args.target[0])
-    with open(flow.correspond_target, 'r') as fopen:
-        correspond_dict = eval(fopen.readline())
+    def __len__(self):
+        return(self.EFM.corpus_size)
 
-def process_data_parallel():
+    def __getitem__(self,idx, grads=False):
+        seed_bytes = self.vectorize_file(self.mapped_seeds[idx])
+        bits = torch.as_tensor(self.bitmap[idx], dtype=torch.float32) * 2 - 1
 
-    stats["status"]="Remapping"
-    update_shm_buff()
+        #Don't waste memory training 
+        seed_bytes.requires_grad = True if grads else False
+        return seed_bytes,bits
 
-    global MAX_BITMAP_SIZE
-    global MAX_FILE_SIZE
-    global SPLIT_RATIO
-    global seed_list
-    global nocov_list
-    global new_seeds
-    global len_seed_list
-    global len_nocov_list
-    global label
+    def get_single_input(self,idx,grads = False):
 
-    call = subprocess.check_output
+        seed_bytes = self.vectorize_file(self.mapped_seeds[idx])
+        seed_bytes = seed_bytes.reshape((1,self.EFM.max_file_size))
+        #Don't waste memory training 
+        seed_bytes.requires_grad = True if grads else False
+        return seed_bytes
 
-    new_seeds = glob.glob('./seeds/id_*')
-    old_seed_list=seed_list
-    old_nocov_list=nocov_list
-    seed_list=glob.glob('./seeds/*')
-    nocov_list=glob.glob('./nocov/*')
-    len_seed_list,len_nocov_list = len(seed_list),len(nocov_list)
-    to_map_seed_list=list(set(seed_list).difference(old_seed_list))+(list(set(nocov_list).difference(old_nocov_list)))
-    SPLIT_RATIO=len(seed_list)+len(nocov_list)
+    def get_seed_index(self, seed_string):
+        return self.mapped_seeds.index(seed_string)
 
-    t0=time.time()
+    @utils.shm_stats(time_fmt=True)
+    def process_bitmaps(self, initial_map = False):
 
-    out = ''
-    warning = False
-    pad=0
-    bitmaps=np.empty([len(to_map_seed_list),MAX_BITMAP_SIZE])
-    for ind,f in enumerate(to_map_seed_list):
-        tmp_list = [] #Keeps list of ID's for each seed file inside loop
-        try:
-            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '1024' if not args.enable_asan else 'none'
-            if argvv[0] == './strip':
-                raise NotImplementedError
-                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
-            else:
-                out = call(['../utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
-        except subprocess.CalledProcessError as e:
-            if not warning:
-                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
-                warning = True 
-            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
-            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
+        self.seeds_list=glob.glob('./seeds/*')
 
-        for line in out.splitlines():
-            edge = line.split(b':')[0]
-            tmp_list.append(int(edge))
-        
-        tmp_list=np.array(tmp_list)
-        not_seen_already=np.invert(np.in1d(tmp_list,label))
-        pad+=sum(not_seen_already)
-        bitmaps=np.pad(bitmaps,[(0,0),(0,sum(not_seen_already))], mode='constant')
-        label=np.append(label,tmp_list[not_seen_already])
-
-        bitmaps[ind]=np.in1d(label,tmp_list).astype('int')
-
-    print("data dimension" + str(bitmaps.shape))
-
-    old_bitmaps=glob.glob("./bitmaps/*")
-    for bitmap in old_bitmaps:
-        tmp=np.load(bitmap)
-        tmp=np.pad(tmp,[(0,pad)],mode='constant')
-        np.save(bitmap,tmp)
-
-    # save training data
-    MAX_BITMAP_SIZE = bitmaps.shape[1] 
-    for idx, i in enumerate(to_map_seed_list):
-        file_name = "./bitmaps/" + i.split('/')[-1]
-        np.save(file_name, bitmaps[idx])
-
-    stats["corpus size"]=str(len_seed_list)
-    stats['bitmap size']=str(MAX_BITMAP_SIZE)
-    stats['nocov size']=str(len_nocov_list)
-    stats["last mapping time"]=time_format(int(time.time()-t0))
-
-    update_shm_buff()
-
-def reduce_variable_files():
-
-    stats['status']='t-mining'
-    update_shm_buff()
-
-    global vari_seed_list
-    global havoc_seed_list
-
-    t0=time.time()
-
-    if round_cnt != 1:
-        old_vari_seed_list=vari_seed_list
-        old_havoc_seed_list=havoc_seed_list
-    else:
-        old_vari_seed_list=[]
-        old_havoc_seed_list=[]
-
-    vari_seed_list = glob.glob('./vari_seeds/*')
-    havoc_seed_list = glob.glob('./havoc_seeds/*')
-    minimise_seed_list =list(set(vari_seed_list).difference(old_vari_seed_list))+(list(set(havoc_seed_list).difference(old_havoc_seed_list))) 
-
-    call = subprocess.check_output
-
-    warning=False
-    for f in minimise_seed_list:
-        outfile = "./seeds/"+f.split('/')[-1]+'min'
-        try:
-            out = call(['timeout','10s','../utils/efm-tmin','-q', '-e', '-i',f,'-o', outfile , '-m', '1024', '-t', '1000','-l',str(MAX_FILE_SIZE)] + args.target)
-        except subprocess.CalledProcessError as e:
-            if not warning:
-                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
-                warning = True 
-            print('Warning : t-min returns non-zero exit status for seed: {0}'.format(f)) 
-        
-    stats["last reducing time"]=time_format(int(time.time()-t0))
-    update_shm_buff()
-    
-
-def cull_nocov():
-
-    stats['status']='culling nocov'
-    update_shm_buff()
-
-    global nocov_list
-    global len_nocov_list
-    global SPLIT_RATIO
-
-    cull_number=(len_nocov_list+len_seed_list)-args.memory_threshold
-    if cull_number > 0:
-        try:
-            deletes=np.random.choice(nocov_list,cull_number,replace=False)
-        except:
-            deletes=[]
-        for file in deletes:
-            os.remove(file)
-    
-        nocov_list=[x for x in nocov_list if x not in deletes]
-        len_nocov_list=len(nocov_list)
-        SPLIT_RATIO=len(seed_list)+len(nocov_list)
-
-    stats['nocov size']=str(len_nocov_list)
-    update_shm_buff()
-
-
-# process training data from afl raw data
-def process_data_init():
-    #Max seed input file size allowed
-    MAX_MAX_FILE_SIZE = 10000
-    MAX_MAX_BITMAP_SIZE = 2000
-
-    global MAX_BITMAP_SIZE
-    global MAX_FILE_SIZE
-    global SPLIT_RATIO
-    global seed_list
-    global nocov_list
-    global new_seeds
-    global label
-    global len_seed_list
-    global stats
-
-    stats={"status":"-",
-           "last accuracy":"-",
-           "bitmap size":"-",
-           "corpus size":"-",
-           "nocov size":"-",
-           "last mapping time":"-",
-           "last reducing time":"-",
-           "last training time":"-",
-           "num grads":"-"
-        }
-
-    stats["status"]="Mapping"
-    update_shm_buff()
-
-    parse_executable()
-    t0=time.time()
-    
-
-    # shuffle training samples
-    seed_list = glob.glob('./seeds/*')
-    len_seed_list = len(seed_list)
-    seed_list.sort()
-    SPLIT_RATIO = len(seed_list)
-    rand_index = np.arange(SPLIT_RATIO)
-    np.random.shuffle(seed_list)
-    new_seeds = glob.glob('./seeds/id_*')
-
-    call = subprocess.check_output
-
-    # get MAX_FILE_SIZE
-    cwd = os.getcwd()
-    max_file_name = call(['ls', '-S', cwd + '/seeds/']).decode('utf8').split('\n')[0].rstrip('\n')
-    MAX_FILE_SIZE = os.path.getsize(cwd + '/seeds/' + max_file_name)
-
-    # create directories to save label, spliced seeds, variant length seeds, crashes and mutated seeds.
-    os.path.isdir("./bitmaps/") or os.makedirs("./bitmaps")
-    nocov_list=glob.glob('./nocov/*')
-
-    # obtain raw bitmaps
-    warning = False
-    raw_bitmap = {} #Is a dictionary for each seed file key containing the sequential ID's of each branch it covered
-    tmp_cnt = [] #Hold's ID's cumlatively for each seed input
-    out = ''
-    for f in seed_list:
-        tmp_list = [] #Keeps list of ID's for each seed file inside loop
-        try:
-            # append "-o tmp_file" to strip's arguments to avoid tampering tested binary.
-            mem_lim= '1024' if not args.enable_asan else 'none'
-            if argvv[0] == './strip':
-                raise NotImplementedError
-                out = call(['./afl-showmap', '-q', '-e', '-o', '/dev/stdout', '-m', '512', '-t', '500'] + argvv + [f] + ['-o', 'tmp_file'])
-            else:
-                out = call(['../utils/afl-showmap','-q', '-e', '-o', '/dev/stdout', '-m', mem_lim, '-t', '1000'] + args.target + [f])
-        except subprocess.CalledProcessError as e:
-            if not warning:
-                print('\nNon-zero exit status, don\'t panic! \nProbably a hanging execution but run again with showmap with a longer timeout or with ASAN to be sure! \n')
-                warning = True 
-            print('Warning : showmap returns non-zero exit status for seed: {0}'.format(f)) 
-            #raise RuntimeError("command '{}' return with error (code {}): {}".format(e.cmd, e.returncode, e.output))
-
-        #Takes the first arg of each tuple generated 
-        #I.e Collecting A -> B -> C -> D -> E (tuples: AB, BC, CD, DE) = [ A , B, C, D, E ]
-        for line in out.splitlines():
-            edge = line.split(b':')[0]
-            tmp_cnt.append(edge)
-            tmp_list.append(edge)
-        raw_bitmap[f] = tmp_list
-    counter = Counter(tmp_cnt).most_common() #Counts the occurances of each edge (ID) [('ID',No.),...] ordered in decending order 
-
-    # save bitmaps to individual numpy label
-    # creates array of N_seed x Total edges found and for each seed assigns a one for an edge it touches and 0 if not
-    label = [int(f[0]) for f in counter]
-    bitmap = np.zeros((len(seed_list), len(label)))
-    for idx, i in enumerate(seed_list):
-        tmp = raw_bitmap[i]
-        for j in tmp:
-            if int(j) in label:
-                bitmap[idx][label.index((int(j)))] = 1
-
-    # label dimension reduction
-    # Kinda weird indepnedent of edge value reduces the bitmap to the different ways each seed can cross each edge
-    fit_bitmap = bitmap
-    print("data dimension" + str(fit_bitmap.shape))
-
-    # save training data
-    MAX_BITMAP_SIZE = fit_bitmap.shape[1]
-    for idx, i in enumerate(seed_list):
-        file_name = "./bitmaps/" + i.split('/')[-1]
-        np.save(file_name, fit_bitmap[idx])
-    
-    label=np.array(label)
-
-    stats["corpus size"]=str(len_seed_list)
-    stats['bitmap size']=str(MAX_BITMAP_SIZE)
-    stats["last mapping time"]=time_format(int(time.time()-t0))
-    update_shm_buff()
-
-def time_format(T):
-    t_m = (T/ 60) % 60
-    t_s = (T) % 60
-    return "{:0.0f} min, {:0.0f} sec".format(t_m,t_s)
-
-# training data generator
-def generate_training_data(lb, ub):
-    seed = np.zeros((ub - lb, MAX_FILE_SIZE))
-    bitmap = np.zeros((ub - lb, MAX_BITMAP_SIZE))
-    train_list=seed_list+nocov_list
-    for i in range(lb, ub):
-        tmp = open(train_list[i], 'rb').read()
-        ln = len(tmp)
-        if ln < MAX_FILE_SIZE:
-            tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
-        seed[i - lb] = [j for j in bytearray(tmp)]
-
-    for i in range(lb, ub):
-        file_name = "./bitmaps/" + train_list[i].split('/')[-1] + ".npy"
-        bitmap[i - lb] = np.load(file_name)
-    return seed, bitmap
-
-
-# learning rate decay
-def step_decay(epoch):
-    initial_lrate = 0.001
-    drop = 0.7
-    epochs_drop = 10.0
-    lrate = initial_lrate * math.pow(drop, math.floor((1 + epoch) / epochs_drop))
-    return lrate
-
-def train_generate(batch_size):
-    global seed_list
-    global nocov_list
-    np.random.shuffle(seed_list)
-    np.random.shuffle(nocov_list)
-    # load a batch of training data
-    for i in range(0, SPLIT_RATIO, batch_size):
-        # load full batch if batchsize is greater than the seeds availible
-        if (i + batch_size) > SPLIT_RATIO:
-            x, y = generate_training_data(i, SPLIT_RATIO)
-            y=y*2-1
-            x = x.astype('float32') / 255
-        # load remaining data for last batch
+        if initial_map:
+            to_map = self.seeds_list
         else:
-            x, y = generate_training_data(i, i + batch_size)
-            y=y*2-1
-            x = x.astype('float32') / 255
-        yield (torch.Tensor(x), torch.Tensor(y))
+            to_map = self.get_unmapped_seeds()
 
 
-# get vector representation of input
-def vectorize_file(fl):
-    seed = np.zeros((1, MAX_FILE_SIZE))
-    tmp = open(fl, 'rb').read()
-    ln = len(tmp)
-    if ln < MAX_FILE_SIZE:
-        tmp = tmp + (MAX_FILE_SIZE - ln) * b'\x00'
-    seed[0] = [j for j in bytearray(tmp)]
-    seed = seed.astype('float32') / 255
-    seed = torch.from_numpy(seed)
-    seed.requires_grad=True
-    return seed
+        #Go through edges of each seed reading through each output file
+        for ind,seed in enumerate(to_map):
+            #Are we the very first?
+            first_entry = (ind == 0) * initial_map
 
-# compute gradient for given input
-# taking gradient of randomly selected bitmap output at randomly selected input
-def gen_adv2(f, fl, optimizer ):
-    adv_list = []
-    x = vectorize_file(fl)
-    K=optimizer.RBF_Kernel(x,optimizer.data)
-    out=torch.mm(K,optimizer.Net)[:,f]
-    grads_value = torch.autograd.grad(out,x)[0].numpy()
-    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-    val = np.sign(grads_value[0][idx])
-    adv_list.append((idx, val, fl))
+            #Open our file
+            with open("./edges/" + seed.split('/')[-1],'r') as seed_file:
+                seed_info = seed_file.read()
+                #Ignore hit counts, list of edges we've hit
+                seed_edges=np.array([int(line.split(':')[0]) for line in seed_info.splitlines()])
+
+            #List of edges for this seed that we haven't already got
+            unknown_edges = np.invert(np.in1d(seed_edges,self.label))
+            #Amount of zeros we'll have to append to the bitmap for the other seeds.
+            pad = sum(unknown_edges)
+
+            #If we dont have any seeds processed, we'll make an empty array in the shape of 
+            #the first map
+            if first_entry : self.bitmap=seed_edges
+            #If not the we'll need to add some zeros to the previous seeds for the new bits
+            elif initial_map and ind == 1: self.bitmap=np.pad(self.bitmap,[0, pad], mode='constant') 
+            else : self.bitmap=np.pad(self.bitmap,[(0,0),(0, pad)], mode='constant')
+
+            #We now know the unknown
+            self.label = np.append(self.label,seed_edges[unknown_edges])
+            #Add the seeds bitmap to the array
+            #If were not in the initial map, just stack the array
+            if not first_entry: self.bitmap = np.vstack(  ( self.bitmap, np.in1d(self.label,seed_edges).astype('int') ) )
+            #Write to the emptry array
+
+            #Update our dataset size
+            self.mapped_seeds += [seed] 
+            self.EFM.corpus_size += 1
+
+        self.EFM.bitmap_size=self.bitmap.shape[1]
+
+        return
+            
+    def get_unmapped_seeds(self): 
+        return list(set(self.seeds_list + self.nocov_list).difference(self.mapped_seeds))
+            
+    def vectorize_file(self, file_name): 
+        with open(file_name, 'rb') as fopen:
+            btflow = torch.tensor([bt for bt in bytearray(fopen.read())], dtype=torch.float32) / 255
+        # pad sequence
+        if self.EFM.max_file_size > len(btflow):
+            btflow = F.pad(btflow, (0, self.EFM.max_file_size -len(btflow)), 'constant', 0)
+        return btflow
+
+    @utils.shm_stats(time_fmt=True)
+    def reduce_variable_files(self):
+
+        self.vari_seed_list = glob.glob('./vari_seeds/*')
+        self.havoc_seed_list = glob.glob('./havoc_seeds/*')
+
+        time_out = 10
+
+        for seed in (self.vari_seed_list + self.havoc_seed_list):
+            if seed not in self.reducing_blacklist:
+                outfile = "./seeds/"+ seed.split('/')[-1]+'min'
+                bits_outfile = "./edges/"+ seed.split('/')[-1]+'min'
+                success = utils.EFM_tmin(seed, outfile, bits_outfile, time_out, self.EFM.max_file_size, args.target)
+                self.reducing_blacklist += [seed]
+
+        return
+
+    @utils.shm_stats(time_fmt=True)
+    def cull_nocov(self):
+        self.nocov_list=glob.glob('./nocov/*')
+        cull_number = len( self.nocov_list ) + len( self.seeds_list) - args.memory_threshold
+
+        if cull_number > 0:
+            try:
+                deletes = np.random.choice( self.nocov_list, cull_number, replace=False)
+            except:
+                deletes = []
+            for file in deletes:
+                os.remove(file)
+    
+            self.nocov_list=glob.glob('./nocov/*')
         
-    return adv_list
+        self.EFM.nocov_size = len( self.nocov_list )
 
+        return
 
-# compute gradient for given input without sign
-def gen_adv3(f, fl, optimizer ):
-    adv_list = []
-
-    x = vectorize_file(fl)
-    K=optimizer.RBF_Kernel(x,optimizer.data)
-    out=torch.mm(K,optimizer.Net)[:,f]
-    grads_value = torch.autograd.grad(out,x)[0].numpy()
-    idx = np.flip(np.argsort(np.absolute(grads_value), axis=1)[:, -MAX_FILE_SIZE:].reshape((MAX_FILE_SIZE,)), 0)
-    #val = np.sign(grads_value[0][idx])
-    val = np.random.choice([1, -1], MAX_FILE_SIZE, replace=True)
-    adv_list.append((idx, val, fl))
-
-    return adv_list
-
-
-# grenerate gradient information to guide furture muatation
-def gen_mutate2(optimizer, edge_num, sign):
+class Extreme_Fuzzing_Machine(utils.EFM_vars):
     
-    #model=Keras model, Edge_num=of paths to smaple as 'interesting', sign=True if train false if not
+    def __init__(self):
+        super().__init__()
+        
+        self.max_file_size=None
+        self.corpus_size=0
+        self.round_count=0
+        self.num_grads = 150
 
-    stats['num grads']=str(edge_num)
-    update_shm_buff()
+        self.parse_executable()
+        self.Data=Edge_Data(self)
+        self.generate_grads(initial=True)
     
-    tmp_list = []
+    def parse_executable(self):
+        self.correspond_dict={}
 
-    # function pointer for gradient computation
-    fn = gen_adv2 if sign else gen_adv3
+        flow = FlowBuilder(args.target[0])
+        with open(flow.correspond_target, 'r') as fopen:
+            self.correspond_dict = eval(fopen.readline())
 
-    # select output neurons to compute gradient
-    interested_indice = select_edges(edge_num)
+    def generate_grads(self, initial=False):
 
-    with open('gradient_info_p', 'w') as f:
-        for edg_idxx, seed_indxx in interested_indice:
-            fl=seed_list[seed_indxx]
-            #print("number of feature " + str(idxx))
-            adv_list = fn(edg_idxx, fl, optimizer )
-            tmp_list.append(adv_list)
-            #Basically takes random inputs from the seed files and considers their gradient on a randomly selected
-            #bitmap and returns the gradients of each input byte w.r.t output 
-            for ele in adv_list:
-                ele0 = [str(el) for el in ele[0]]
-                ele1 = [str(int(el)) for el in ele[1]]
-                ele2 = ele[2]
+        self.Data.cull_nocov()
+
+        self.Data.process_bitmaps(initial_map=initial)
+
+        optimizer = self.train()
+
+        self.generate_mutations(optimizer, self.num_grads)
+
+        self.round_count+=1
+
+        return  
+
+
+
+    def accur_1(self,y_true, y_pred):
+
+        y_true = torch.sign(y_true - 1e-6)#Make better
+        pred =torch.sign(y_pred - 1e-6) 
+        summ = self.bitmap_size 
+        right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
+        wrong_num = summ-right_num
+
+        acc = torch.mean(right_num/(right_num+wrong_num))
+        return "{:.2f}".format(acc*100)
+
+    @utils.shm_stats(time_fmt=False)
+    def train(self):
+
+        st = time.time()
+        #Build model 
+        optimizer= pseudoInverse(self.corpus_size,C=0.001,L=0,sigma=500.0)
+        #LoadData
+        data_iter = DataLoader(self.Data, batch_size=self.corpus_size, shuffle=True)
+        for _,(data,target) in enumerate(data_iter,1):
+            optimizer.data=data
+            optimizer.train(inputs=data, targets=target)
+            output = torch.mm(optimizer.K.T,optimizer.Net)
+            self.accuracy=self.accur_1(target,output)
+
+        et = time.time()
+        self.last_training = "{:.2f} sec".format(et-st)
+        return optimizer
+
+    @utils.shm_stats(time_fmt=False)
+    def generate_mutations(self, optimizer, N_grads):
+
+        interested_indices = self.select_edges(N_grads)
+
+        with open('gradient_info_p', 'w') as f:
+            for edg_idxx, seed_indxx in interested_indices:
+                fl=self.Data.seeds_list[seed_indxx]
+                poss, vals, fl = self.get_gradients(edg_idxx, fl, optimizer )
+                
+                ele0 = [str(el) for el in poss]
+                ele1 = [str(int(el)) for el in vals]
+                ele2 = fl
                 f.write(",".join(ele0) + '|' + ",".join(ele1) + '|' + ele2 + "\n")
 
+        return
 
-def build_model():
+    def get_gradients(self, selected_ind, seed, optimizer ):
 
-    optimizer= pseudoInverse(SPLIT_RATIO,C=0.001,L=0,sigma=500.0,is_cuda=args.enable_cuda)
-    if args.enable_cuda:
-        optimizer.to(device)#<-Will this work?
-
-    return optimizer
-
-def accur_1(y_true, y_pred):
-    y_true = torch.sign(y_true - 1e-6)#Make better
-    pred =torch.sign(y_pred - 1e-6) 
-    summ = MAX_BITMAP_SIZE
-    right_num =torch.sum(torch.eq(y_true,pred),dim=1) 
-    wrong_num = summ-right_num
-    return torch.mean(right_num/(right_num+wrong_num))
-
-def train(optimizer):
-    batch_size=SPLIT_RATIO
-    init = time.time()
-    for batch_idx, (data, target) in enumerate(train_generate(batch_size)):
-        if args.enable_cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data,requires_grad=False), \
-                       Variable(target.type(torch.float32),requires_grad=False)
-        optimizer.data=data
-        optimizer.train(inputs=data, targets=target)
-        output = torch.mm(optimizer.K.T,optimizer.Net)
-        acc=accur_1(target,output)
-
-    ending = time.time()
-    print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
-    stats["last training time"] = "{:.2f} sec".format(ending-init)
-    stats["last accuracy"] = "{:.2f}".format(acc*100)
-    update_shm_buff()
-
-def gen_grad(data):
-    global round_cnt
-    stats["status"]="Training"
-    update_shm_buff()
-    t0 = time.time()
-    optimizer = build_model()
-    train(optimizer)
-    #100-> 200 mutation cases?
-    stats["status"] = "Generate grads" 
-    update_shm_buff()      
-    gen_mutate2(optimizer, 5, data[:5] == b"train") #500 -> 100 in paper
-    round_cnt = round_cnt + 1
-    #print(time.time() - t0)
-
-def select_edges(edge_num):
-    # candidate edges
-    if np.random.rand() < 0.1:
-        # random selection mechanism
-        alter_edges = np.random.choice(MAX_BITMAP_SIZE, edge_num)
-        alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
-    else:
-        candidate_set = set()
-        for edge in label:
-            if check_select_edge(edge):
-                candidate_set.add(list(label).index(edge))
-        replace_flag = True if len(candidate_set) < edge_num else False
-        alter_edges = np.random.choice(list(candidate_set), edge_num, replace=replace_flag)
-        alter_seeds = np.random.choice(len_seed_list, edge_num).tolist()
-
-        for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
-            seed=seed_list[seed_indx]
-            seed_bits=np.load("./bitmaps/" + seed.split('/')[-1] + ".npy")
-            seed_inds=np.where(seed_bits==1)[0]
-            if not interest_ind in list(seed_inds):
-                candidates=list(candidate_set.intersection(seed_inds))    
-                if candidates:
-                    alter_edges[i]=np.random.choice(candidates)
-                else:
-                    alter_edges=np.delete(alter_edges,i)
-                    alter_seeds=np.delete(alter_seeds,i)
-    # random seed list
-    #TODO:
-    #Adding table so that seeds and indices arent repeated
-    #Add additional check here to see if edge is in the path of seed file 
-    #Also focus on opitmising the gradient stuff and I think that will be everything
-    #Is nocov wasting time on seeds that will never get passed? 
+        seed_ind = self.Data.get_seed_index(seed)
+        x = self.Data.get_single_input(seed_ind, grads=True)
+        K=optimizer.RBF_Kernel(x,optimizer.data)
+        out=torch.mm(K,optimizer.Net)[:,selected_ind]
+        grads_value = torch.autograd.grad(out,x)[0].numpy()
+        idx = np.argsort(-np.absolute(grads_value[0]))
+        val = np.sign(grads_value[0][idx])
+        
+        return idx, val, seed
 
 
-    interested_indice = zip(alter_edges.tolist(), alter_seeds)
-    return interested_indice
-
-
-def check_select_edge(edge_id):
-    SELECT_RATIO = 0.4
-    if edge_id not in correspond_dict.keys():
-        return True
-    
-    correspond_set = correspond_dict[edge_id]
-    if len(correspond_set) == 0:
-        return True
-
-    cover_cnt = 0
-    for ce in correspond_set:
-        if ce in label:
-            cover_cnt += 1
-    if cover_cnt / len(correspond_set) > SELECT_RATIO:
-        return False
-    return True
-
-def update_shm_buff():
-    msg=bytearray()
-    for ele in stats.values():
-        null_pad=40 - (len(ele)+1) 
-        msg.extend(ele.encode('utf-8'))
-        for i in range(null_pad) :
-            msg.append(0)
-
-    shm.write(bytes(msg))
-
-
-def setup_server():
-    global shm 
-
-    #Initalise server config
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #Such that the OS releases the port quicker for rapid rerunning
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    #Attatch to ip and port
-    sock.bind((HOST, PORT))
-    #Waits for neuzz execution
-    sock.listen(1)
-    print("Waiting for neuzz engine")
-    conn, addr = sock.accept()
-    print('Connected by neuzz engine ' + str(addr))
-    os.chdir(args.out_dir)
-    shm = ipc.SharedMemory(ipc.ftok("/tmp", 6667,silence_warning = True), 0, 0) 
-    shm.attach(0,0)
-    t0=time.time()
-    process_data_init()
-    print("Initial map in: " + str("{:.1f}".format(time.time()-t0)) + " seconds")
-    gen_grad(b"train")
-    conn.sendall(b"start")
-    while True:
-        print("Sleeping")
-        stats['status']='Sleeping'
-        update_shm_buff()
-        data = conn.recv(1024)
-        if not data:
-            break
+    def select_edges(self, N_grads):
+        # candidate edges
+        len_seed_list = len(self.Data.seeds_list)
+        if np.random.rand() < 0.1:
+            # random selection mechanism
+            alter_edges = np.random.choice(self.bitmap_size, N_grads)
+            alter_seeds = np.random.choice(len_seed_list, N_grads).tolist()
         else:
-            if data[0:3] == b"MAP":
-                print("Remapping")
-                t0=time.time()
-                reduce_variable_files()
-                process_data_parallel()
-                cull_nocov()
-                print("Remapped in: " + str(time.time()-t0) + " seconds")
-            else:
-                print("Retraining")
-                t0=time.time()
-                reduce_variable_files()
-                process_data_parallel()
-                cull_nocov()
-                print("Remapped in: " + str(time.time()-t0) + " seconds")
-                gen_grad(data)
-                conn.sendall(b"start")
-    conn.close()
+            candidate_set = set()
+            for edge in self.Data.label:
+                if self.check_select_edge(edge):
+                    candidate_set.add(list(self.Data.label).index(edge))
+            replace_flag = True if len(candidate_set) < N_grads else False
+            alter_edges = np.random.choice(list(candidate_set), N_grads, replace=replace_flag)
+            alter_seeds = np.random.choice(len_seed_list, N_grads).tolist()
 
+            for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+                seed=self.Data.seeds_list[seed_indx]
+                seed_bits=self.Data.bitmap[self.Data.get_seed_index(seed)]
+                seed_inds=np.where(seed_bits==1)[0]
+                if not interest_ind in list(seed_inds):
+                    candidates=list(candidate_set.intersection(seed_inds))    
+                    if candidates:
+                        alter_edges[i]=np.random.choice(candidates)
+                    else:
+                        alter_edges=np.delete(alter_edges,i)
+                        alter_seeds=np.delete(alter_seeds,i)
+        #TODO:
+        #Adding table so that seeds and indices arent repeated
 
-if __name__ == '__main__':
+        interested_indice = zip(alter_edges.tolist(), alter_seeds)
+        return interested_indice
 
-    parser = argparse.ArgumentParser(description="""Runs the background machine
-                        learning process for Neuzz.""")
+    def check_select_edge(self, edge_id):
+        SELECT_RATIO = 0.4
+        if edge_id not in self.correspond_dict.keys():
+            return True
+    
+        correspond_set = self.correspond_dict[edge_id]
+        if len(correspond_set) == 0:
+            return True
 
-    parser.add_argument('-e',
-                        '--enable-asan',
-                        help='Enable ASAN (runs afl-showmap with -m none)',
-                        default=False,
-                        action='store_true')
-                    
-    parser.add_argument('-c',
-                        '--enable-cuda',
-                        help='Enables cuda functionality on training',
-                        default=False,
-                        action='store_true')
+        cover_cnt = 0
+        for ce in correspond_set:
+            if ce in self.Data.label:
+                cover_cnt += 1
+        if cover_cnt / len(correspond_set) > SELECT_RATIO:
+            return False
+        return True
+        
 
-    parser.add_argument('-n',
-                        '--memory-threshold',
-                        help='Maximum amount of nocov seeds allowed',
-                        type=int,
-                        default=20000)
-
-    parser.add_argument('-q',
-                        '--quiet',
-                        help='Suppress printing messages, send to log instead',
-                        default=False,
-                        action='store_true')
-
-    parser.add_argument('-o',
-                        '--out-dir',
-                        help='working dir for fuzzing',
-                        type=str,
-                        default="")
-
-    parser.add_argument('target', nargs=argparse.REMAINDER)
+if __name__ == "__main__":
+    
+    #CLI args
+    parser = utils.add_args()
+    
     global args
-    global device
+
     args = parser.parse_args()
-    if args.enable_cuda:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print("Using Device: " + str(device))
+
+    #If called by EFM-fuzz redirect any prints that sneak their way in
     if args.quiet:
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
 
+    logger=utils.init_logger('./NN_log', debug=args.quiet)
 
-    #Start program and spin up server
-    setup_server()
+    tcp_conn = utils.connect_tcp(logger,HOST,PORT)
+
+    os.chdir(args.out_dir)
+
+    utils.shm_stats.SHM_obj=utils.SHM()
+
+    logger("Shared memory set up")
+
+    train = tcp_conn.recv(1024)
+
+    if train[:5] !=  b'start':
+        raise "efm-fuzz never ran dry"
+
+    EFM=Extreme_Fuzzing_Machine()
+    tcp_conn.sendall(b"start")
+
+    while True:
+
+        train = utils.wait_fuzzer_data(tcp_conn)
+        
+        if train:
+            EFM.generate_grads()
+            tcp_conn.sendall(b"start")
+
+        EFM.Data.reduce_variable_files()
+
+
+
+

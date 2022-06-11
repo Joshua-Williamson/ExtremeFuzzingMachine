@@ -1,12 +1,10 @@
 import os
 import re
-from sqlite3 import DataError
 import time
 import shutil
 import shlex
 import subprocess
 import logging
-from turtle import update
 
 import sysv_ipc as ipc
 import functools
@@ -309,4 +307,3 @@ class EFM_vars(object):
         return value
  
     #:)
-    

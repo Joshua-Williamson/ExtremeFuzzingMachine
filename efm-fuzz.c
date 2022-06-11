@@ -2404,7 +2404,7 @@ void fuzz_lop(char *grad_file, int sock) {
   /* parse the gradient to guide fuzzing */
   int total_execs_old=0;
   float nocov_seeds_threshold=10000.;
-  int remap_interval = 5;
+  int remap_interval = 25;
 
   stage_cnt=0;
   while ((nread = getline(&line, &llen, stream)) != -1) {
@@ -2906,18 +2906,18 @@ static void show_stots(void) {
 
   SAYF(bSTG bVR bH bSTOP cLGX "module load " bSTG bH10 bHT bH bH2 bH5 bHB bH bSTOP cPIX "findings " bSTG bH20 bH5 bVL bSTOP "\n");
 
-  sprintf(tmp, "%s total, %s unique", DI(total_crashes),DI(unique_crashes)); 
+  sprintf(tmp, "%s, %s unique", DI(total_crashes),DI(unique_crashes)); 
   
   SAYF(bSTG bV bSTOP "  Mapping time : " cRST "%-15s" bSTG bV bSTOP "    Crashes : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[5], tmp);
 
-  sprintf(tmp, "%s total, %s unique", DI(total_tmout),DI(unique_tmout)); 
+  sprintf(tmp, "%s, %s unique", DI(total_tmout),DI(unique_tmout)); 
 
   SAYF(bSTG bV bSTOP " T-mining time : " cRST "%-15s" bSTG bV bSTOP "  Time outs : " cRST "%-21s" bSTG bV bSTOP"\n",nn_arr[6], tmp);
 
   SAYF(bSTG bV bSTOP " Training time : " cRST "%-15s" bSTG bV bSTOP " Edge count : " cRST "%-21d" bSTG bV bSTOP"\n",nn_arr[7], t_bytes);
 
   /*LAST BOX */
-  SAYF(bSTG bLB bH30 bH2 bX bSTOP cCYA " Log messages" bSTG bH10 bH2 bH2 bHB bH5 bH2 bRB bSTOP "\n");
+  SAYF(bSTG bLB bH30 bH2 bX bH bSTOP cPIX "log messages " bSTG bH10 bH2 bH bHB bH5 bH2 bRB bSTOP "\n");
 
   if (log_warn > 10000) sprintf(tmp, "10000(+)!");
 
