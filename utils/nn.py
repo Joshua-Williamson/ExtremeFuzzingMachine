@@ -1,18 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import argparse
 import os
 import sys
 import glob
-import math
 import time
-import random
-import socket
-import subprocess
 import numpy as np
-from collections import Counter
-from torch.autograd import Variable
 import torch
 from torch.utils.data import Dataset, DataLoader
 import sysv_ipc as ipc

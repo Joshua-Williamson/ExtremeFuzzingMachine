@@ -7,7 +7,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
-import time
 
 class pseudoInverse(nn.Module):
     def __init__(self,input_dim,C=1e-2,forgettingfactor=1,L =100,is_cuda=False,sigma=0.0001):
