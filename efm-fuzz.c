@@ -2846,7 +2846,7 @@ static void show_stots(void) {
   memset(tmp, ' ', banner_pad);
 
   sprintf(tmp + banner_pad, "%s " cLCY cLGN
-          " (%s)", cYEL "Extreme Fuzzing Machine", use_banner);
+          " (%s)", cBRI "Extreme Fuzzing Machine", use_banner);
 
   SAYF("\n%s\n\n", tmp);
 
@@ -2937,7 +2937,7 @@ static void show_stots(void) {
 }
 
 static void usage(u8* argv0) {
-  SAYF("\n efm-fuzz [ options ] -- /path/to/fuzzed_app -fuzzed -app -args\n\n"
+  SAYF("efm-fuzz [ options ] -- /path/to/fuzzed_app -fuzzed -app -args\n"
 
        "Required parameters:\n\n"
 
@@ -2959,6 +2959,7 @@ static void usage(u8* argv0) {
 void main(int argc, char *argv[]) {
   int opt;
   ELMLOGO();
+  SAYF(SP2 cBRI "v1.0 " cRST " email: " cBRI "<1joshua.williamson@gmail.com> \n\n" cRST);
   while ((opt = getopt(argc, argv, "+i:o:d:m:")) > 0)
 
     switch (opt) {
