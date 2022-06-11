@@ -7,4 +7,8 @@ TODO:
  Whyb cant I seem to nest steer decorators with my own
 
  why is timeout going up faster than it can possivly timeoput
- do proper malloc
+ do proper malloc for bufs in each case
+
+ requirements and docker
+
+ Add detailed whitepaper-esque thing

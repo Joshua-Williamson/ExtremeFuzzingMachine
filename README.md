@@ -40,7 +40,6 @@ For the easy way do: $ pip install -r requirements.txt
 $ pip install -r requirements.txt
 ```
 
-## Docker :
 ## Build :
 Build this repo by cloning and then:
 ```bash
