@@ -59,6 +59,7 @@ static u8 *trace_bits,                /* SHM with instrumentation bitmap   */
 
 static u8 *in_file,                   /* Minimizer input test case         */
           *out_file,                  /* Minimizer output file             */
+          *showmap_file,              /* Showmap ouput file                */
           *prog_in,                   /* Targeted program input file       */
           *target_path,               /* Path to target binary             */
           *doc_path;                  /* Path to docs                      */
@@ -72,9 +73,11 @@ static u32 in_len,                    /* Input data length                 */
            missed_crashes,            /* Misses due to crashes             */
            missed_paths,              /* Misses due to exec path diffs     */
            exec_tmout = EXEC_TIMEOUT, /* Exec timeout (ms)                 */
+           threshold_time,            /* Time to reduce                    */
            threshold;                 /* Threshold to reduce file to       */
 
-static u64 mem_limit = MEM_LIMIT;     /* Memory limit (MB)                 */
+static u64 mem_limit = MEM_LIMIT,     /* Memory limit (MB)                 */
+           start_time;                /* Start time of fuzz               */
 
 static s32 shm_id,                    /* ID of the SHM region              */
            dev_null_fd = -1;          /* FD to /dev/null                   */
@@ -84,6 +87,8 @@ static u8  crash_mode,                /* Crash-centric mode?               */
            edges_only,                /* Ignore hit counts?                */
            exact_mode,                /* Require path match for crashes?   */
            use_stdin = 1,             /* Use stdin for program input?      */
+           showmap = 0,               /* Wether to writeout bitmap         */
+           thresh_time,               /* Time to reduce by                 */
            quiet_mode;                /* Suppress output?                  */
 
 
@@ -132,6 +137,27 @@ static void classify_counts(u8* mem) {
 
 }
 
+static u64 get_cur_time(void) {
+
+  struct timeval tv;
+  struct timezone tz;
+
+  gettimeofday(&tv, &tz);
+
+  return (tv.tv_sec);
+
+}
+
+static int overtime_kill(void){ 
+
+  int elapsed_time = get_cur_time() - start_time;
+
+  if (elapsed_time > threshold_time){
+    if (!quiet_mode) ACTF("Took, too long bailing out");
+    exit(123);
+  }  
+
+}
 
 /* Apply mask to classified bitmap (if set). */
 
@@ -277,6 +303,8 @@ static u8 run_target(char** argv, u8* mem, u32 len, u8 first_run) {
 
   memset(trace_bits, 0, MAP_SIZE);
   MEM_BARRIER();
+
+  if (thresh_time) overtime_kill();
 
   prog_in_fd = write_to_file(prog_in, mem, len);
 
@@ -839,11 +867,13 @@ static void usage(u8* argv0) {
 
        "Execution control settings:\n\n"
 
+       "  -s file       - file for writing out bitmap of reduced file \n"
        "  -f file       - input file read by the tested program (stdin)\n"
        "  -t msec       - timeout for each run (%u ms)\n"
-       "  -l bytes      - threshold to reduce file to"
+       "  -l bytes      - threshold to reduce file to or exit with code 123\n"
        "  -m megs       - memory limit for child process (%u MB)\n"
-       "  -Q            - use binary-only instrumentation (QEMU mode)\n\n"
+       "  -Q            - use binary-only instrumentation (QEMU mode)\n"
+       "  -T secs       - Time to reduce by or return exit code 123\n\n"
 
        "Minimization settings:\n\n"
 
@@ -994,6 +1024,30 @@ static void read_bitmap(u8* fname) {
 }
 
 
+static void write_results(char * out_file) {
+
+  s32 fd;
+  u32 i, ret = 0;
+
+  unlink(out_file); /* Ignore errors */
+  fd = open(out_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) PFATAL("Unable to create '%s'", out_file);
+
+  FILE* f = fdopen(fd, "w");
+
+  if (!f) PFATAL("fdopen() failed");
+
+  for (i = 0; i < MAP_SIZE; i++) {
+
+    if (!trace_bits[i]) continue;
+    ret++;
+
+    fprintf(f, "%06u:%u\n", i, trace_bits[i]);
+
+  }
+  fclose(f);
+
+}
 
 /* Main entry point */
 
@@ -1006,7 +1060,7 @@ int main(int argc, char** argv) {
   doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;
 
 
-  while ((opt = getopt(argc,argv,"+i:o:f:m:t:l:B:xeqQV")) > 0)
+  while ((opt = getopt(argc,argv,"+i:o:s:f:m:t:l:B:T:xeqQV")) > 0)
 
     switch (opt) {
 
@@ -1020,6 +1074,13 @@ int main(int argc, char** argv) {
 
         if (out_file) FATAL("Multiple -o options not supported");
         out_file = optarg;
+        break;
+
+      case 's':
+
+        if (showmap_file) FATAL("Multiple -o options not supported");
+        showmap_file= optarg;
+        showmap=1;
         break;
 
       case 'f':
@@ -1134,6 +1195,16 @@ int main(int argc, char** argv) {
         read_bitmap(optarg);
         break;
 
+      case 'T':
+
+        if (thresh_time) FATAL("Multiple - options not supported");
+        thresh_time= 1;
+
+        threshold_time = atoi(optarg);
+
+        break;
+
+
       case 'V': /* Show version number */
 
         /* Version number has been printed already, just quit. */
@@ -1151,6 +1222,7 @@ int main(int argc, char** argv) {
   setup_shm();
   setup_signal_handlers();
 
+  start_time=get_cur_time();
   set_up_environment();
 
   find_binary(argv[optind]);
@@ -1191,16 +1263,21 @@ int main(int argc, char** argv) {
 
   minimize(use_argv);
 
-  if (!quiet_mode){
-    if (in_len > threshold) ACTF("Threshold not met as %u > %u, not writing out",in_len,threshold);
-    else ACTF("Writing output to '%s'...", out_file);
+  if ((threshold_given) && (in_len > threshold)){
+    if (!quiet_mode) ACTF("Threshold not met as %u > %u, not writing out",in_len,threshold);
+    exit(123);
+  }
+  else {
+    if (!quiet_mode) ACTF("Writing output to '%s'...", out_file);
   }
 
   unlink(prog_in);
   prog_in = NULL;
 
-  if (in_len <= threshold) close(write_to_file(out_file, in_data, in_len));
-
+  if ((threshold_given) && (in_len <= threshold)){
+    close(write_to_file(out_file, in_data, in_len));
+    if (showmap) write_results(showmap_file);
+  }
   if (!quiet_mode) OKF("We're done here. Have a nice day!\n");
 
   exit(0);

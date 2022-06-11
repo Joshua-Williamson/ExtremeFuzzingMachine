@@ -1796,8 +1796,9 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
   /* save mutations that find new edges. */
   int ret = has_new_bits(virgin_bits);
   if (ret == 2) {
-    char *mut_fn = alloc_printf("%s/id_%d_%06d_cov", out_dir, round_cnt, mut_cnt++);
+    char *mut_fn = alloc_printf("%s/id_%d_%06d_cov", out_dir, round_cnt, mut_cnt);
     char *mut_nm = alloc_printf("%s/id_%d_%06d_cov", "./edges", round_cnt, mut_cnt);
+    mut_cnt++;
     write_results(mut_nm);
     free(mut_nm);
     add_file_to_container(file_container, mut_fn);
@@ -1807,8 +1808,9 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
     close(mut_fd);
   }
   else if (ret == 1) {
-    char *mut_fn = alloc_printf("%s/id_%d_%06d", out_dir, round_cnt, mut_cnt++);
+    char *mut_fn = alloc_printf("%s/id_%d_%06d", out_dir, round_cnt, mut_cnt);
     char *mut_nm = alloc_printf("%s/id_%d_%06d", "./edges", round_cnt, mut_cnt);
+    mut_cnt++;
     write_results(mut_nm);
     free(mut_nm);
     add_file_to_container(file_container, mut_fn);
@@ -1820,6 +1822,7 @@ void execute_target_program(char* out_buf, size_t length, char* out_dir) {
   else if (write_nocov && rand() % 1000000 < nocov_statistic) {
     char *mut_fn = alloc_printf("%s/id_%d_%06d_+nocov", "nocov", round_cnt, mut_cnt);
     char *mut_nm = alloc_printf("%s/id_%d_%06d_+nocov", "./edges", round_cnt, mut_cnt);
+    mut_cnt++;
     write_results(mut_nm);
     free(mut_nm);
     /*add_file_to_container(file_container, mut_fn); <--- do i want this?*/
@@ -2208,17 +2211,23 @@ void afl_havoc_stage(struct queue_entry* q) {
 
     if (ret) {
       u8* m_fn;
+      char *mut_nm = alloc_printf("%s/id_%d_%06d_havoc", "./edges", round_cnt, havoc_cnt);
       if (temp_len > len)
-        m_fn = alloc_printf("%s/id_%d_%06d_havoc", "./havoc_seeds", round_cnt, havoc_cnt++);
-      else
-        m_fn = alloc_printf("%s/id_%d_%06d_havoc", "seeds", round_cnt, havoc_cnt++);
+        m_fn = alloc_printf("%s/id_%d_%06d_havoc", "./havoc_seeds", round_cnt, havoc_cnt);
+      else{
+        m_fn = alloc_printf("%s/id_%d_%06d_havoc", "seeds", round_cnt, havoc_cnt);
+        write_results(mut_nm);
+      }
 
       int m_fd = open(m_fn, O_WRONLY | O_CREAT | O_EXCL, 0600);
       ck_write(m_fd, havoc_out_buf, temp_len, m_fn);
       close(m_fd);
 
+      havoc_cnt++;
+
       struct queue_entry* entry = construct_queue_entry(m_fn);
       add_entry_to_queue(queue_havoc, entry);
+      free(mut_nm);
       free(m_fn);
     }
     free(havoc_out_buf);
@@ -2226,7 +2235,7 @@ void afl_havoc_stage(struct queue_entry* q) {
   free(havoc_in_buf);
 }
 
-void dry_run(char *dir) {
+void dry_run(int sock, char *dir) {
   stage_name="Dry running";
   stage_tot=count_seeds(dir,"");
   stage_cnt=0;
@@ -2308,6 +2317,8 @@ void dry_run(char *dir) {
   if (chdir("..") == -1)
     WARNFLOG("chdir failed");
   closedir(dp);
+
+  send(sock,"start", 6,0);
 
   /* estimate the average exec time at the beginning*/
   u64 avg_us = (u64)(total_cal_us / cnt);
@@ -2393,7 +2404,7 @@ void fuzz_lop(char *grad_file, int sock) {
   /* parse the gradient to guide fuzzing */
   int total_execs_old=0;
   float nocov_seeds_threshold=10000.;
-  int remap_interval =50;
+  int remap_interval = 5;
 
   stage_cnt=0;
   while ((nread = getline(&line, &llen, stream)) != -1) {
@@ -2420,7 +2431,7 @@ void fuzz_lop(char *grad_file, int sock) {
     }
 
     /*Send remap signal*/
-    if ((stage_cnt % remap_interval) == 0){
+    if ((stage_cnt % remap_interval) == 0 && stage_cnt != stage_tot){
         OKFLOG("Remap Signal ");
         send(sock,"MAP", 5,0);
     }
@@ -2535,7 +2546,7 @@ void start_fuzz(int f_len) {
 
   /* dry run initial seeds*/
   /* Use log functions to message from here because the screen will be up*/
-  dry_run("seeds");
+  dry_run(sock,"seeds");
 
   /* start fuzz */
   char buf[16];
