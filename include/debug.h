@@ -43,6 +43,9 @@
 #  define cMGN "\x1b[0;35m"
 #  define cCYA "\x1b[0;36m"
 #  define cLGR "\x1b[0;37m"
+#  define cLGX "\x1b[0;92m"
+#  define cPIX "\x1b[0;95m"
+#  define cBCYA "\x1b[1;36m"
 #  define cGRA "\x1b[1;90m"
 #  define cLRD "\x1b[1;91m"
 #  define cLGN "\x1b[1;92m"
@@ -168,41 +171,9 @@
 /* Just print stuff to the appropriate stream. */
 
 #ifdef MESSAGES_TO_STDOUT
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    printf("%s", log_msg_buf);                              \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
-#  define SAYF(x...) log(x)
-
+#  define SAYF(x...)    printf(x)
 #else 
-#define log(...)                                            \
-  do {                                                      \
-    sprintf(log_msg_buf, __VA_ARGS__);                      \
-    fprintf("%s", log_msg_buf);                              \
-    time_t rawtime = time(NULL);                            \
-    char strTime[100];                                      \
-    strftime(strTime, sizeof(strTime), "%Y-%m-%d %H:%M:%S", \
-             localtime(&rawtime));                          \
-    FILE *f = fopen("./log_fuzz", "a+");                    \
-    char log_buf[2048];                                     \
-    sprintf(log_buf, "%s: %s", strTime, log_msg_buf);       \
-    fputs(log_buf, f);                                      \
-    fclose(f);                                              \
-  } while (0)
-
-#  define SAYF(x...) log(x)
-
+#  define SAYF(x...)    fprintf(stderr, x)
 #endif /* ^MESSAGES_TO_STDOUT */
 
 /* Show a prefixed warning. */
@@ -210,6 +181,34 @@
 #define WARNF(x...) do { \
     SAYF(cYEL "[!] " cBRI "WARNING: " cRST x); \
     SAYF(cRST "\n"); \
+  } while (0)
+
+/* Log functions for when screen is up */
+
+#define WARNFLOG(x...) do { \
+    log_warn++;\
+    if (not_on_tty) SAYF(cYEL "[!] " cBRI "WARNING: " cRST x); \
+    if (not_on_tty) SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define ACTFLOG(x...) do { \
+    if (not_on_tty) SAYF(cLBL "[*] " cRST x); \
+    if (not_on_tty) SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define BADFLOG(x...) do { \
+    log_fatal++;\
+    if (not_on_tty) SAYF(cLRD "\n[-] " cRST x); \
+    if (not_on_tty)SAYF(cRST "\n"); \
+    else log(x);\
+  } while (0)
+
+#define OKFLOG(x...) do { \
+    if (not_on_tty) SAYF(cLGN "[+] " cRST x); \
+    if (not_on_tty)SAYF(cRST "\n"); \
+    else log(x);\
   } while (0)
 
 /* Show a prefixed "doing something" message. */
@@ -274,6 +273,15 @@
 
 /* Error-checking versions of read() and write() that call RPFATAL() as
    appropriate. */
+
+/*Art*/
+
+#define ELMLOGO() SAYF(cBRI " \
+    __________  ___\n \
+   / __/ __/  |/  /\n \
+  / _// _// /|_/ / \n \
+ /___/_/ /_/  /_/  Extreme Fuzzing Machine (2022) \
+        \n\n" cRST);
 
 #define ck_write(fd, buf, len, fn) do { \
     u32 _len = (len); \

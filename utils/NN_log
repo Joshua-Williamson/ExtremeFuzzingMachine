@@ -1,0 +1,2 @@
+[2022-06-11 11:57:27,569][utils.py][INFO] Waiting for EFM-fuzz connection
+[2022-06-11 12:03:10,607][utils.py][INFO] Connected to EFM-fuzz on: ('127.0.0.1', 46092)

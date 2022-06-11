@@ -1,0 +1,7 @@
+TODO:
+ a few things in queue entries are malloc'd and not freed after the queue is executes.
+ we should probably free those after execution? Look at other valgrind things.
+
+ I have somehow broken the NN module by passing the args wrong a few commits ago. Need to fix.
+
+ Whyb cant I seem to nest steer decorators with my own
