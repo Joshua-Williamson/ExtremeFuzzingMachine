@@ -19,7 +19,7 @@ class FlowBuilder:
     def __init__(self, bin_file: str):
         self.bin_file = bin_file
 
-        self.cf_dir = '../flow'
+        self.cf_dir = './flow'
         self.target = bin_file[bin_file.rfind('/') + 1:]
         self.edge_target = f'{self.cf_dir}/edge-{self.target}'
         self.dump_target = f'{self.cf_dir}/dump-{self.target}'

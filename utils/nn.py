@@ -324,11 +324,11 @@ if __name__ == "__main__":
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
 
+    os.chdir(args.out_dir)
+
     logger=utils.init_logger('./NN_log', debug=args.quiet)
 
     tcp_conn = utils.connect_tcp(logger,HOST,PORT)
-
-    os.chdir(args.out_dir)
 
     utils.shm_stats.SHM_obj=utils.SHM()
 
