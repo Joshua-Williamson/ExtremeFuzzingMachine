@@ -74,13 +74,57 @@ $ cp -a <afl-out-dir>/queue <EFM-in-dir>
 ```
 
 ### 3. Start Fuzzing 
-Now you can finally begin, make an directory you would like to output the results to. And run the fuzzer.
+Now you can finally begin, make an directory you would like to output the results to. And run the fuzzer. Make sure that you copy over the efm-fuzz binary as well as the utils directory from the source into the parent directory of the input and output directories, so that your directory looks like this:
+
+```bash
+<Parent-Dir>
+    |
+      -> efm-fuzz
+         utils
+         <EFM-in-dir>
+         <EFM-out-dir>
+```
+
+Now you're ready to go, just remember to add a '--' after the end of the efm-fuzz args and a @@ at the end of the args you pass to the target so he fuzzer CLI parser doesn't get confused. Remember to execute in an environment that python can access all the required packages
 
 ```bash
 $ ./efm-fuzz -i <EFM-in-dir> -o <EFM-out-dir> -- </path/to/program> <--program --args> @@
 ```
 
 NOTE: Every time you run efm-fuzz it will overwrite your results direcrtory so saves any fuzzing campaigns you embark upon!
+
+## Debugging :
+In case something is going wrong: 
+
+If you suspect the python module is to blame launch a new shell and cd into utils from your parent testing directory:
+```bash
+$ cd utils
+$ python nn.py -o ../<EFM-out-dir> <path/to/program>
+```
+The nn.py module will then say that it is waiting for efm-fuzz. Then, add the -d flag to the efm-fuzz args
+```bash
+$ ./efm-fuzz -i <EFM-in-dir> -o <EFM-out-dir> -d -- </path/to/program> <--program --args> @@
+```
+and run it too see what's happening. You can also do this process similarly by launching the python module in a debugger.
+
+If you thing efm-fuzz is playing up, make sure efm was compiled in debug mode by typing make debug or make all.
+```bash
+$ make debug
+or 
+$ make all
+```
+And run the command in gdb with the python module executed seperately:
+```bash
+$ gdb --args ./efm-fuzz -i <EFM-in-dir> -o <EFM-out-dir> -d -- </path/to/program> <--program --args> @@
+```
+In the event that efm-fuzz crashes out with a segmentation fault or similar, it is likely that the cleanup functions weren't executed, killing the 
+python module and deallocating the shared memories. Such that next session when the memories are reallocated, it will probably fail. A shortcut around this issue is by runnig these commands after each run:
+```bash
+$ ipcrm --all=shm 
+$ pkill python 
+```
+The first command will deallocate all shared memories (use with care if you are operating other programs) and the latter will kill the python modules.
+It is also likely to kill and other python process's you have running.
 
 ## Sample programs :
  There are 10 sample programs with test cases ready to go in EFM in the './programs' folder, provided courtesy of NEUZZ.
