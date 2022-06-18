@@ -1,0 +1,4 @@
+pytorch
+torchvision
+numpy
+sysv-ipc

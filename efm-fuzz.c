@@ -2510,7 +2510,7 @@ void start_fuzz(int f_len) {
     exit(0);
   }
   if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    WARNF("Connection Failed");
+    WARNF("Connection to python module failed again, try launching it yourself from a seperate shell and adding the -d flag the efm-fuzz args.");
     exit(0);
   }
 
