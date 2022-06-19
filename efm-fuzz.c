@@ -973,6 +973,10 @@ int set_havoc_template(char *dir){
       FILE *fl=fopen(init_seed,"r");
       free(init_seed);
       tmp = fsize(fl);
+      if (tmp > 10000){
+        FATAL("Seed: < %s >, is larger than 10000 bytes, either delete it or reduce it using afl-min", entry->d_name);
+        exit(0);
+      } 
       if (tmp > len) len=tmp;
     }
   }
