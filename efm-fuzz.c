@@ -2949,7 +2949,7 @@ static void usage(u8* argv0) {
        "  -o dir        - output directory for fuzzer findings\n\n"
 
        "Optional: \n\n"
-       "  -m megs       - memory limit for child process \n"
+       "  -m mB         - memory limit for child process, use '-m none' for use with ASAN \n"
        "  -d            - disables auto-lanuching python neural net module, launch seperately for debugging.\n\n"     
  
        "For additional tips, please consult the README.\n\n"

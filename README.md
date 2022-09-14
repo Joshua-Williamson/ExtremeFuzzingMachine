@@ -126,5 +126,8 @@ $ pkill python
 The first command will deallocate all shared memories (use with care if you are operating other programs) and the latter will kill the python modules.
 It is also likely to kill and other python process's you have running.
 
+## ASAN :
+For use with ASAN, compile your target with ASAN flags and run efm-fuzz with '-m none' flag to increase the memory limit of the executions. May give slower performance, deopending on the hardware you are running on.
+
 ## Sample programs :
  There are 10 sample programs with test cases ready to go in EFM in the './programs' folder, provided courtesy of NEUZZ.

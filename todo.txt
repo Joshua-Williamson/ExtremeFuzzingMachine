@@ -2,13 +2,151 @@ TODO:
  a few things in queue entries are malloc'd and not freed after the queue is executes.
  we should probably free those after execution? Look at other valgrind things.
 
- I have somehow broken the NN module by passing the args wrong a few commits ago. Need to fix.
-
- Whyb cant I seem to nest steer decorators with my own
-
  why is timeout going up faster than it can possivly timeoput
  do proper malloc for bufs in each case
 
  requirements and docker
 
  Add detailed whitepaper-esque thing
+
+ select edges neighbouring, maybe doesnt work all the time, maybe need to switch it off after a while...
+
+ Remap matrix at frequent intervals, like t-mining, as is taking like 20 minutes at 
+ Training seems to be slower too... Maybe the dataloader I propgrammed is actually less effiecint than I thought?
+
+ Error in training at 20800 seeds? -> maybe buggy nocov code
+
+ In mapping -> vstack slow, pad slow... Fixes?
+
+ But it doesn't actually matter too much as this all happens faster than the AFL_havoc stage, so is not really a problem for now.
+ Probably bacause all of the data is being loaded twice, think about doing it the other way? Check with timing tool
+
+ Adding table so that seeds and indices arent repeated
+
+ Switch to explored edges that aren't on the path of the particular seed execution
+
+ Smarter nocov cull based on array size. to keep training time under a couple of minutes in extreme 
+
+ Old training function on nnn_old.py:
+ Timer unit: 1e-06 s
+
+Total time: 31.975 s
+File: /home/ubuntu/NCC_FUZZ/ELM_running/utils/nn_old.py
+Function: train at line 448
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   448                                           @profiler
+   449                                           def train(optimizer):
+   450         5         15.0      3.0      0.0      batch_size=SPLIT_RATIO
+   451         5         20.0      4.0      0.0      init = time.time()
+   452        10   23284178.0 2328417.8     72.8      for batch_idx, (data, target) in enumerate(train_generate(batch_size)):
+   453         5         35.0      7.0      0.0          if args.enable_cuda:
+   454                                                       data, target = data.cuda(), target.cuda()
+   455        10        235.0     23.5      0.0          data, target = Variable(data,requires_grad=False), \
+   456         5        191.0     38.2      0.0                         Variable(target.type(torch.float32),requires_grad=False)
+   457         5        178.0     35.6      0.0          optimizer.data=data
+   458         5    6440352.0 1288070.4     20.1          optimizer.train(inputs=data, targets=target)
+   459         5    1716242.0 343248.4      5.4          output = torch.mm(optimizer.K.T,optimizer.Net)
+   460         5     530012.0 106002.4      1.7          acc=accur_1(target,output)
+   461                                           
+   462         5         40.0      8.0      0.0      ending = time.time()
+   463         5       2282.0    456.4      0.0      print('Training time: {:.2f}sec/ Training Accuracy: {:.2f}'.format(ending - init,acc))
+   464         5         48.0      9.6      0.0      stats["last training time"] = "{:.2f} sec".format(ending-init)
+   465         5        256.0     51.2      0.0      stats["last accuracy"] = "{:.2f}".format(acc*100)
+   466         5        933.0    186.6      0.0      update_shm_buff()
+
+And on the new:
+
+otal time: 2.60117 s
+File: /home/ubuntu/NCC_FUZZ/ELM_running/utils/nn.py
+Function: train at line 216
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   216                                               @profiler
+   217                                               # @utils.shm_stats(time_fmt=False)
+   218                                               def train(self):
+   219                                           
+   220         1         11.0     11.0      0.0          st = time.time()
+   221                                                   #Build model 
+   222         1        259.0    259.0      0.0          optimizer= pseudoInverse(self.corpus_size,C=0.001,L=0,sigma=500.0)
+   223                                                   #LoadData
+   224         1        771.0    771.0      0.0          data_iter = DataLoader(self.Data, batch_size=self.corpus_size, shuffle=True)
+   225         2    2017141.0 1008570.5     77.5          for _,(data,target) in enumerate(data_iter,1):
+   226         1         30.0     30.0      0.0              optimizer.data=data
+   227         1     433475.0 433475.0     16.7              optimizer.train(inputs=data, targets=target)
+   228         1      97785.0  97785.0      3.8              output = torch.mm(optimizer.K.T,optimizer.Net)
+   229         1      51504.0  51504.0      2.0              self.accuracy=self.accur_1(target,output)
+   230                                           
+   231         1          7.0      7.0      0.0          et = time.time()
+   232         1        184.0    184.0      0.0          self.last_training = "{:.2f} sec".format(et-st)
+   233         1          2.0      2.0      0.0          return optimizer
+
+Theres actually no issue with the new one, I think nocov and readelfs large bitmap is just too much to handle. Will be fixed with smarter nocov culling based on the size of the entire array accounting for the bitmap.
+Or perhaps just serving up the array as it is without torch's dataloader rubbish might work better for training. Something to think about for future.
+
+This is the bigger issue, padding and stacking is completely killing the mapping time a temporary fix is doing it at regular intervals. But need to come up with a better way of mapping.
+
+
+Timer unit: 1e-06 s
+
+Total time: 35.4799 s
+File: /home/ubuntu/NCC_FUZZ/ELM_running/utils/nn.py
+Function: process_bitmaps at line 66
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    66                                               @profiler
+    67                                               # @utils.shm_stats(time_fmt=True)
+    68                                               def process_bitmaps(self, initial_map = False):
+    69                                           
+    70         1      12521.0  12521.0      0.0          self.seeds_list=glob.glob('./seeds/*')
+    71                                           
+    72         1          4.0      4.0      0.0          if initial_map:
+    73         1          4.0      4.0      0.0              to_map = self.seeds_list
+    74                                                   else:
+    75                                                       to_map = self.get_unmapped_seeds()
+    76                                           
+    77                                           
+    78                                                   #Go through edges of each seed reading through each output file
+    79      1595       5401.0      3.4      0.0          for ind,seed in enumerate(to_map):
+    80                                                       #Are we the very first?
+    81      1594       3070.0      1.9      0.0              first_entry = (ind == 0) * initial_map
+    82                                           
+    83                                                       #Open our file
+    84      1594     147176.0     92.3      0.4              with open("./edges/" + seed.split('/')[-1],'r') as seed_file:
+    85      1594      62577.0     39.3      0.2                  seed_info = seed_file.read()
+    86                                                           #Ignore hit counts, list of edges we've hit
+    87      1594    1272579.0    798.4      3.6                  seed_edges=np.array([int(line.split(':')[0]) for line in seed_info.splitlines()])
+    88                                           
+    89                                                       #List of edges for this seed that we haven't already got
+    90      1594     785345.0    492.7      2.2              unknown_edges = np.invert(np.in1d(seed_edges,self.label))
+    91                                                       #Amount of zeros we'll have to append to the bitmap for the other seeds.
+    92      1594    3845805.0   2412.7     10.8              pad = sum(unknown_edges)
+    93                                           
+    94                                                       #If we dont have any seeds processed, we'll make an empty array in the shape of 
+    95                                                       #the first map
+    96      1594       3391.0      2.1      0.0              if first_entry : self.bitmap=seed_edges
+    97                                                       #If not the we'll need to add some zeros to the previous seeds for the new bits
+    98      1593       2971.0      1.9      0.0              elif initial_map and ind == 1: self.bitmap=np.pad(self.bitmap,[0, pad], mode='constant') 
+    99      1592   12728670.0   7995.4     35.9              else : self.bitmap=np.pad(self.bitmap,[(0,0),(0, pad)], mode='constant')
+   100                                           
+   101                                                       #We now know the unknown
+   102      1594     106387.0     66.7      0.3              self.label = np.append(self.label,seed_edges[unknown_edges])
+   103                                                       #Add the seeds bitmap to the array
+   104                                                       #If were not in the initial map, just stack the array
+   105      1594     843415.0    529.1      2.4              one_hot = np.in1d(self.label,seed_edges)
+   106      1594   15289728.0   9592.1     43.1              if not first_entry: self.bitmap = np.vstack(  ( self.bitmap, one_hot.astype('int') ) )
+   107                                                       #Write to the emptry array
+   108                                           
+   109                                                       #Update our dataset size
+   110      1594      13085.0      8.2      0.0              self.mapped_seeds += [seed] 
+   111      1594     353718.0    221.9      1.0              self.EFM.corpus_size += 1
+   112                                           
+   113      1594       3875.0      2.4      0.0              if "nocov" in seed:
+   114                                                           self.EFM.nocov_size += 1
+   115                                           
+   116         1        174.0    174.0      0.0          self.EFM.bitmap_size=self.bitmap.shape[1]
+   117                                           
+   118         1          1.0      1.0      0.0          return

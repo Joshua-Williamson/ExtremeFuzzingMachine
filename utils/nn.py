@@ -61,11 +61,11 @@ class Edge_Data(Dataset):
         return self.mapped_seeds.index(seed_string)
 
     @utils.shm_stats(time_fmt=True)
-    def process_bitmaps(self, initial_map = False):
+    def process_bitmaps(self, initial = False):
 
         self.seeds_list=glob.glob('./seeds/*')
 
-        if initial_map:
+        if initial:
             to_map = self.seeds_list
         else:
             to_map = self.get_unmapped_seeds()
@@ -74,7 +74,7 @@ class Edge_Data(Dataset):
         #Go through edges of each seed reading through each output file
         for ind,seed in enumerate(to_map):
             #Are we the very first?
-            first_entry = (ind == 0) * initial_map
+            first_entry = (ind == 0) * initial
 
             #Open our file
             with open("./edges/" + seed.split('/')[-1],'r') as seed_file:
@@ -91,7 +91,7 @@ class Edge_Data(Dataset):
             #the first map
             if first_entry : self.bitmap=seed_edges
             #If not the we'll need to add some zeros to the previous seeds for the new bits
-            elif initial_map and ind == 1: self.bitmap=np.pad(self.bitmap,[0, pad], mode='constant') 
+            elif initial and ind == 1: self.bitmap=np.pad(self.bitmap,[0, pad], mode='constant') 
             else : self.bitmap=np.pad(self.bitmap,[(0,0),(0, pad)], mode='constant')
 
             #We now know the unknown
@@ -104,6 +104,9 @@ class Edge_Data(Dataset):
             #Update our dataset size
             self.mapped_seeds += [seed] 
             self.EFM.corpus_size += 1
+
+            if "nocov" in seed:
+                self.EFM.nocov_size += 1
 
         self.EFM.bitmap_size=self.bitmap.shape[1]
 
@@ -137,20 +140,26 @@ class Edge_Data(Dataset):
 
         return
 
-    @utils.shm_stats(time_fmt=True)
+    @utils.shm_stats(time_fmt=False)
     def cull_nocov(self):
         self.nocov_list=glob.glob('./nocov/*')
         cull_number = len( self.nocov_list ) + len( self.seeds_list) - args.memory_threshold
 
         if cull_number > 0:
+            delete_mask = np.ones_like(self.bitmap,dtype = bool)
             try:
                 deletes = np.random.choice( self.nocov_list, cull_number, replace=False)
             except:
                 deletes = []
             for file in deletes:
                 os.remove(file)
-    
+                del_index = self.mapped_seeds.index(file)
+                delete_mask[del_index] = False
+                self.mapped_seeds.remove(file)
+
+            self.bitmap = self.bitmap[delete_mask]
             self.nocov_list=glob.glob('./nocov/*')
+            self.EFM.corpus_size -= len(deletes)
         
         self.EFM.nocov_size = len( self.nocov_list )
 
@@ -181,7 +190,7 @@ class Extreme_Fuzzing_Machine(utils.EFM_vars):
 
         self.Data.cull_nocov()
 
-        self.Data.process_bitmaps(initial_map=initial)
+        self.Data.process_bitmaps(initial=initial)
 
         optimizer = self.train()
 
@@ -190,8 +199,6 @@ class Extreme_Fuzzing_Machine(utils.EFM_vars):
         self.round_count+=1
 
         return  
-
-
 
     def accur_1(self,y_true, y_pred):
 
@@ -268,19 +275,20 @@ class Extreme_Fuzzing_Machine(utils.EFM_vars):
             alter_edges = np.random.choice(list(candidate_set), N_grads, replace=replace_flag)
             alter_seeds = np.random.choice(len_seed_list, N_grads).tolist()
 
-            for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
-                seed=self.Data.seeds_list[seed_indx]
-                seed_bits=self.Data.bitmap[self.Data.get_seed_index(seed)]
-                seed_inds=np.where(seed_bits==1)[0]
-                if not interest_ind in list(seed_inds):
-                    candidates=list(candidate_set.intersection(seed_inds))    
-                    if candidates:
-                        alter_edges[i]=np.random.choice(candidates)
-                    else:
-                        alter_edges=np.delete(alter_edges,i)
-                        alter_seeds=np.delete(alter_seeds,i)
-        #TODO:
-        #Adding table so that seeds and indices arent repeated
+
+            #Somehow broken this? -TODO
+            # for i,(seed_indx,interest_ind) in enumerate(zip(alter_seeds,alter_edges)):
+            #     seed=self.Data.seeds_list[seed_indx]
+            #     seed_bits=self.Data.bitmap[self.Data.get_seed_index(seed)]
+            #     seed_inds=np.where(seed_bits==1)[0]
+            #     if not interest_ind in list(seed_inds):
+            #         candidates=list(candidate_set.intersection(seed_inds))    
+            #         if candidates:
+            #             alter_edges[i]=np.random.choice(candidates)
+            #         else:
+            #             alter_edges=np.delete(alter_edges,i)
+            #             alter_seeds=np.delete(alter_seeds,i)
+
 
         interested_indice = zip(alter_edges.tolist(), alter_seeds)
         return interested_indice
@@ -317,7 +325,6 @@ if __name__ == "__main__":
         sys.stdout = open(os.devnull, 'w')
         sys.stderr = open(os.devnull, 'w')
 
-    os.chdir(args.out_dir)
 
     logger=utils.init_logger('./NN_log', debug=args.quiet)
 
@@ -328,6 +335,8 @@ if __name__ == "__main__":
     logger("Shared memory set up")
 
     train = tcp_conn.recv(1024)
+
+    os.chdir(args.out_dir)
 
     if train[:5] !=  b'start':
         raise "efm-fuzz never ran dry"
@@ -344,6 +353,8 @@ if __name__ == "__main__":
             tcp_conn.sendall(b"start")
 
         EFM.Data.reduce_variable_files()
+        EFM.Data.process_bitmaps(initial=False)
+        EFM.Data.cull_nocov()
 
 
 
