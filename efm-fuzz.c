@@ -209,6 +209,7 @@ char *target_path,                      /* Path to target binary            */
      *in_dir,                           /* Input directory with test cases  */
      *out_file,                         /* File to fuzz, if any             */
      *out_dir,                          /* Working & output directory       */
+     *dbg_file,                         /* Debugging file                   */
      *log_pth,                          /* Path for log file                */
      *nn_arr[9],                        /* Points shared mem stats segments */
      **nn_args,                        /* Array of args to pass to nn mod  */
@@ -2247,6 +2248,14 @@ void dry_run(int sock, char *dir) {
   struct dirent *entry;
   struct stat statbuf;
   file_container = create_file_container();
+
+  if (dbg_file) {
+    WARNF("Debug: running single seed");
+    not_on_tty = 1;
+    run_debug();
+    exit(0);
+  }
+
   if ((dp = opendir(dir)) == NULL) {
     WARNF("cannot open directory: %s", dir);
     return;
@@ -2390,6 +2399,37 @@ void copy_seeds(char *in_dir, char *out_dir) {
   return;
 }
 
+void run_debug(void) {
+  /* read seed into mem */
+  int fn_fd = open(dbg_file, O_RDONLY);
+  if (fn_fd == -1) {
+    WARNF("open failed");
+    exit(0);
+  }
+  
+  struct stat st;
+  int ret = fstat(fn_fd, &st);
+  int file_len = st.st_size;
+  memset(out_buf,  0, len);
+
+  ck_read(fn_fd, out_buf, file_len, fn);
+
+  execute_target_program(out_buf, len, "seeds");
+
+  SAYF(cBRI "\n\n      Debugging with single run of seed" cYEL " %s " cRST "= ", dbg_file); 
+
+  if (total_crashes) SAYF(
+        cRED "Crash detected \n\n" cRST "\n");
+
+  if (total_tmout) SAYF(
+        cRED "Timeout detected \n\n" cRST "\n");
+
+  if (!total_crashes && !total_crashes) SAYF(
+        cRED "Ran normally \n\n" cRST "\n");
+
+  return;
+}
+
 void fuzz_lop(char *grad_file, int sock) {
   grads_last=get_cur_time();
   copy_file("gradient_info_p", grad_file);
@@ -2504,8 +2544,6 @@ void start_fuzz(int f_len) {
     exit(0);
   }
 
-
-
   memset(&serv_addr, '0', sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_port = htons(PORT);
@@ -2526,7 +2564,7 @@ void start_fuzz(int f_len) {
         perror("turning NONBLOCKING on failed\n");
       }
 
-  ACTF("start of the fuzzing module");
+  ACTF("Start of the fuzzing module");
 
   /* set up buffer, I know this is a bad idea*/
 
@@ -2951,7 +2989,7 @@ static void usage(u8* argv0) {
        "Optional: \n\n"
        "  -m mB         - memory limit for child process, use '-m none' for use with ASAN \n"
        "  -d            - disables auto-lanuching python neural net module, launch seperately for debugging.\n\n"     
- 
+       "  -f            - debug argument to run a single seed and quit EFM "
        "For additional tips, please consult the README.\n\n"
 
        );
@@ -2964,7 +3002,7 @@ void main(int argc, char *argv[]) {
   int opt;
   ELMLOGO();
   SAYF(SP2 cBRI "v1.0 " cRST " email: " cBRI "<1joshua.williamson@gmail.com> \n\n" cRST);
-  while ((opt = getopt(argc, argv, "+i:o:d:m:")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:d:m:f:")) > 0)
 
     switch (opt) {
     case 'i': /* input dir */
@@ -3014,6 +3052,9 @@ void main(int argc, char *argv[]) {
       }
       break;
       
+    case 'f': /* output dir */
+      dbg_file = optarg;
+      break;
 
     default:
       usage(argv[0]);

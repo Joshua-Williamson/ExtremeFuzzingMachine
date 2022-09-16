@@ -150,3 +150,34 @@ Line #      Hits         Time  Per Hit   % Time  Line Contents
    116         1        174.0    174.0      0.0          self.EFM.bitmap_size=self.bitmap.shape[1]
    117                                           
    118         1          1.0      1.0      0.0          return
+   o
+
+
+   (neuzz_torch) ubuntu@ip-172-31-37-117:~/NCC_FUZZ/DEMO_DIR/utils$  cd /home/ubuntu/NCC_FUZZ/DEMO_DIR/utils ; /usr/bin/env /home/ubuntu/miniconda3/envs/neuzz_torch/bin/python /home/ubuntu/.vscode-server/extensions/ms-python.python-2022.14.0/pythonFiles/lib/python/debugpy/adapter/../../debugpy/launcher 46321 -- /home/ubuntu/NCC_FUZZ/DEMO_DIR/utils/nn.py -o ../EFM_out ../djpeg 
+[2022-09-14 11:15:45,997][utils.py][INFO] Waiting for EFM-fuzz connection
+Waiting for EFM-fuzz connection
+[2022-09-14 11:15:52,226][utils.py][INFO] Connected to EFM-fuzz on: ('127.0.0.1', 57988)
+Connected to EFM-fuzz on: ('127.0.0.1', 57988)
+[2022-09-14 11:15:52,227][utils.py][INFO] Shared memory set up
+Shared memory set up
+
+[-] PROGRAM ABORT : Target binary times out (adjusting -t may help).
+         Location : main(), efm-tmin.c:1248
+
+
+[-] PROGRAM ABORT : Target binary times out (adjusting -t may help).
+         Location : main(), efm-tmin.c:1248
+
+
+[-] PROGRAM ABORT : Target binary times out (adjusting -t may help).
+         Location : main(), efm-tmin.c:1248
+
+
+[-] PROGRAM ABORT : Target binary times out (adjusting -t may help).
+         Location : main(), efm-tmin.c:1248
+
+
+[-] PROGRAM ABORT : Target binary times out (adjusting -t may help).
+         Location : main(), efm-tmin.c:1248
+
+- EFM t-min times out? Which is strange bcause it is on quiet mode, efm-tmin bug?
