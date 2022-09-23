@@ -181,3 +181,5 @@ Shared memory set up
          Location : main(), efm-tmin.c:1248
 
 - EFM t-min times out? Which is strange bcause it is on quiet mode, efm-tmin bug?
+
+-Add memory warning for ASAN IF EXITING EARLY?

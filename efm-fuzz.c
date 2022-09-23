@@ -178,6 +178,7 @@ int write_nocov,                        /* Bool to write or not to write a nocov
     log_warn = 0,                       /* Number of warnings in the log                                    */
     log_fatal = 0,                      /* Any fatal log entries                                            */
     kill_signal,                        /* Signal that killed the child                                     */
+    uses_asan = 0,                      /* Is binary ASAN compiled?                                         */
     loc[10000],                         /* Array to store critical bytes locations                          */
     sign[10000],                        /* Array to store sign of critical bytes                            */
     num_index[14] = {0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192};
@@ -887,6 +888,11 @@ void check_binary(u8* fname) {
   f_data = mmap(0, f_len, PROT_READ, MAP_PRIVATE, fd, 0);
 
   if (f_data == MAP_FAILED) PFATAL("Unable to mmap file '%s'", target_path);
+
+  if (memmem(f_data, f_len, "libasan.so", 10)) {
+    ACTF("ASAN compiled target detected");
+    uses_asan = 1;
+  }
 
   close(fd);
 
@@ -2509,7 +2515,7 @@ void run_debug(void) {
         cRED "Timeout detected \n\n" cRST "\n");
 
   if (!total_crashes && !total_crashes) SAYF(
-        cRED "Ran normally \n\n" cRST "\n");
+        cGRN "Ran normally \n\n" cRST "\n");
 
   return;
 }
