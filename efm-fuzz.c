@@ -859,6 +859,77 @@ int remove_directory(const char *path) {
    return r;
 }
 
+/* Do a PATH search and find target binary to see that it exists and
+   isn't a shell script - a common and painful mistake. We also check for
+   a valid ELF header and for evidence of AFL instrumentation. */
+
+void check_binary(u8* fname) {
+
+  s32 fd;
+  u8* f_data;
+  u32 f_len = 0;
+
+  struct stat st;
+
+  ACTF("Validating target binary...");
+
+  fd = open(target_path, O_RDONLY);
+  stat(target_path, &st);
+  f_len = st.st_size;
+
+  if (fd < 0) PFATAL("Unable to open '%s'", target_path);
+
+  f_data = mmap(0, f_len, PROT_READ, MAP_PRIVATE, fd, 0);
+
+  if (f_data == MAP_FAILED) PFATAL("Unable to mmap file '%s'", target_path);
+
+  close(fd);
+
+  if (f_data[0] == '#' && f_data[1] == '!') {
+
+    SAYF("\n" cLRD "[-] " cRST
+         "Oops, the target binary looks like a shell script. Some build systems will\n"
+         "    sometimes generate shell stubs for dynamically linked programs; try static\n"
+         "    library mode (./configure --disable-shared) if that's the case.\n\n"
+
+         "    Another possible cause is that you are actually trying to use a shell\n" 
+         "    wrapper around the fuzzed component. Invoking shell can slow down the\n" 
+         "    fuzzing process by a factor of 20x or more; it's best to write the wrapper\n"
+         "    in a compiled language instead.\n");
+
+    FATAL("Program '%s' is a shell script", target_path);
+
+  }
+
+#ifndef __APPLE__
+
+  if (f_data[0] != 0x7f || memcmp(f_data + 1, "ELF", 3))
+    FATAL("Program '%s' is not an ELF binary", target_path);
+
+#else
+
+  if (f_data[0] != 0xCF || f_data[1] != 0xFA || f_data[2] != 0xED)
+    FATAL("Program '%s' is not a 64-bit Mach-O binary", target_path);
+
+#endif /* ^!__APPLE__ */
+
+  if ( !memmem(f_data, f_len, SHM_ENV_VAR, strlen(SHM_ENV_VAR) + 1)) {
+
+    SAYF("\n" cLRD "[-] " cRST
+         "Looks like the target binary is not instrumented! The fuzzer depends on\n"
+         "    compile-time instrumentation to isolate interesting test cases while\n"
+         "    mutating the input data. For more information, and for tips on how to\n"
+         "    instrument binaries \n \n "
+         );
+
+    FATAL("No instrumentation detected");
+
+  }
+
+  if (munmap(f_data, f_len)) PFATAL("unmap() failed");
+
+}
+
 /* Sets up file descriptors to send stuff to the void, makes dirs in working dir */
 
 void setup_dirs_fds(void) {
@@ -3074,6 +3145,7 @@ void main(int argc, char *argv[]) {
   if (!out_file) setup_stdio_file();
   detect_file_args(argc, argv + optind + 1);
   setup_targetpath(argv[optind]);
+  check_binary(argv[optind]);
   check_crash_handling();
   copy_seeds(in_dir, out_dir);
   start_nn_mod(argv + optind);
