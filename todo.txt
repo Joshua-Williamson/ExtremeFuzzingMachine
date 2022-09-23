@@ -183,3 +183,4 @@ Shared memory set up
 - EFM t-min times out? Which is strange bcause it is on quiet mode, efm-tmin bug?
 
 -Add memory warning for ASAN IF EXITING EARLY?
+-FFMPEG: reduce files to way below 10 000 and listen to Pdcst again
