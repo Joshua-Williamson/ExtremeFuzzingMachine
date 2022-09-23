@@ -537,6 +537,11 @@ void init_forkserver(char** argv) {
   out_file = alloc_printf("%s/.cur_input",cwd);
   OKF("Spinning up the fork server...");
 
+  setenv("ASAN_OPTIONS", "abort_on_error=1:"
+                          "detect_leaks=0:"
+                          "symbolize=0:"
+                          "allocator_may_return_null=1", 0);
+
   if (pipe(st_pipe) || pipe(ctl_pipe)) WARNF("pipe() failed");
 
   forksrv_pid = fork();
@@ -1461,6 +1466,11 @@ static u8 run_target(int timeout) {
   int status = 0;
 
   child_timed_out = 0;
+
+  setenv("ASAN_OPTIONS", "abort_on_error=1:"
+                          "detect_leaks=0:"
+                          "symbolize=0:"
+                          "allocator_may_return_null=1", 0);
 
   /* After this memset, trace_bits[] are effectively volatile, so we
      must prevent any earlier operations from venturing into that
@@ -2472,7 +2482,10 @@ void copy_seeds(char *in_dir, char *out_dir) {
 
 void run_debug(void) {
   /* read seed into mem */
-  int fn_fd = open(dbg_file, O_RDONLY);
+  char* cwd = getcwd(NULL, 0);
+  /* Dumb way of doing I know */
+  char* dbg_path = alloc_printf("../%s", dbg_file);
+  int fn_fd = open(dbg_path, O_RDONLY);
   if (fn_fd == -1) {
     WARNF("open failed");
     exit(0);
