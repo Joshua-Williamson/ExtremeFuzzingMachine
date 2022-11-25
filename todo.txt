@@ -187,3 +187,78 @@ Shared memory set up
 
 Check running args in nn.py are doing it prooperly with the @@...
 OOM error with large edge contexts in coomplicated programs??
+Doesn't seem to be in flow.py itself. But does occur when the first function in flow is being looped over????
+
+python -m memory_profiler ./utils/flow.py ffmpeg_g 
+Filename: ./utils/flow.py
+
+Line #    Mem usage    Increment  Occurrences   Line Contents
+=============================================================
+   175     41.3 MiB     41.3 MiB           1       @profile
+   176                                             def init_work_env(self):
+   177     41.5 MiB      0.2 MiB           1           self.strip_search()
+   178                                         
+   179     41.5 MiB      0.0 MiB           1           if not os.path.exists(self.cf_dir):
+   180                                                     os.mkdir(self.cf_dir)
+   181     41.5 MiB      0.0 MiB           1           if not os.path.exists(self.dump_target):
+   182                                                     cmd = f"objdump -d {self.bin_file} > {self.dump_target}"
+   183                                                     os.system(cmd)
+   184     41.5 MiB      0.0 MiB           1           if os.path.exists(self.control_flow_target):
+   185                                                     return
+   186     41.5 MiB      0.0 MiB           1           with open(self.dump_target) as f:
+   187    666.2 MiB    624.7 MiB           1               orig_codes = f.readlines()
+   188    679.0 MiB      0.0 MiB       30001               for i in range(len(orig_codes)):
+   189    679.0 MiB      0.0 MiB       30001                   line = orig_codes[i]
+   190    679.0 MiB      0.0 MiB       30001                   if not utils.is_valid_line(line):
+   191    678.5 MiB      0.0 MiB         469                       continue
+   192    679.0 MiB      0.0 MiB       29532                   if line[0] == ' ':
+   193    679.0 MiB      1.5 MiB       29074                       tmp = line.split(':')
+   194    679.0 MiB      1.0 MiB       29074                       addr = int(tmp[0], 16)
+   195    679.0 MiB      2.3 MiB       29074                       self.addr2asm[addr] = tmp[1].strip()
+   196    679.0 MiB      0.0 MiB       29074                       if addr > self.max_asm_addr:
+   197    679.0 MiB      0.0 MiB       29074                           self.max_asm_addr = addr
+   198    679.0 MiB      0.0 MiB       29074                       if addr < self.min_asm_addr:
+   199    666.2 MiB      0.0 MiB           1                           self.min_asm_addr = addr
+   200    679.0 MiB      7.2 MiB       29074                       self.next_block[addr] = set()
+   201    679.0 MiB      0.3 MiB       29074                       if '__afl_maybe_log' in line:
+   202    679.0 MiB      0.0 MiB        1504                           reg_exp = r'0x(.*),'
+   203    679.0 MiB      0.2 MiB        1504                           match_obj = re.search(reg_exp, orig_codes[i - 1])
+   204    679.0 MiB      0.0 MiB        1504                           if not match_obj:
+   205                                                                     print(f"[-]: fatal error: unable to recognize afl_maybe_log id of: {orig_codes[i - 1]}")
+   206                                                                     exit(-1)
+   207    679.0 MiB      0.3 MiB        1504                           node = Node(int(match_obj.group(1), 16), addr)
+   208    679.0 MiB      0.0 MiB        1504                           self.addr2block[addr] = node
+   209    679.0 MiB      0.0 MiB        1504                           self.next_block[addr].add(addr)
+   210    679.0 MiB      0.0 MiB        1504                           self.nodes.add(node)
+   211    679.0 MiB      0.0 MiB       29532                   if line[-2] == ':':
+   212    678.5 MiB      0.0 MiB         458                       tmp = line.split(' ')
+   213    678.5 MiB      0.0 MiB         458                       addr = int(tmp[0], 16)
+   214    678.5 MiB      0.0 MiB         458                       label = tmp[1][:-2]
+   215    678.5 MiB      0.0 MiB         458                       self.addr2label[addr] = label
+   216    678.5 MiB      0.0 MiB         458                       self.label2addr[label] = addr
+   217                                                         
+   218    679.0 MiB      0.0 MiB       29532                   if i == 30000:
+   219    679.0 MiB      0.0 MiB           1                       break 
+
+ After running flow on ffmpeg for like 30 mins 
+               total        used        free      shared  buff/cache   available
+Mem:       16383000     3687832     5914584         932     6780584    12352844 ---> from 14100000 when not being used so not too crazy
+Swap:             0           0           0
+
+But when being run from nn.py it OOM's
+
+To fuzz with edge context the whole of ffmpeg is too crazy. Even being compiled non-statically
+
+Static:  (neuzz_torch) ubuntu@ip-172-31-37-117:~/NCC_FUZZ/ffmpeg_fuzz$ objdump -d ffmpeg | wc -l
+         13412753
+         (neuzz_torch) ubuntu@ip-172-31-37-117:~/NCC_FUZZ/ffmpeg_fuzz$ objdump -d ffmpeg_g | wc -l
+         13498013
+
+Non-static :
+         (neuzz_torch) ubuntu@ip-172-31-37-117:~/NCC_FUZZ/ffmpeg$ objdump -d ffmpeg_g | wc -l
+         13498008
+         (neuzz_torch) ubuntu@ip-172-31-37-117:~/NCC_FUZZ/ffmpeg$ objdump -d ffmpeg | wc -l
+         13412748
+
+These libraries are too large to actually fuzz in thier entirety. You need to only instument one part of the functionalty and fuzz that...?
+Or do a dynamic edge context analysis where it only looks one node further than it can see with current coverage?
