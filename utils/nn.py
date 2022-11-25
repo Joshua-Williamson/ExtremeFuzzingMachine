@@ -167,9 +167,10 @@ class Edge_Data(Dataset):
 
 class Extreme_Fuzzing_Machine(utils.EFM_vars):
     
-    def __init__(self):
+    def __init__(self, logger):
         super().__init__()
         
+        self.logger = logger
         self.max_file_size=None
         self.corpus_size=0
         self.round_count=0
@@ -182,7 +183,7 @@ class Extreme_Fuzzing_Machine(utils.EFM_vars):
     def parse_executable(self):
         self.correspond_dict={}
 
-        flow = FlowBuilder(args.target[0])
+        flow = FlowBuilder(args.target[0], self.logger)
         with open(flow.correspond_target, 'r') as fopen:
             self.correspond_dict = eval(fopen.readline())
 
@@ -339,9 +340,11 @@ if __name__ == "__main__":
     os.chdir(args.out_dir)
 
     if train[:5] !=  b'start':
-        raise "efm-fuzz never ran dry"
+        err_msg = "ERROR: efm-fuzz never ran dry"
+        logger(err_msg)
+        raise RuntimeError(err_msg)
 
-    EFM=Extreme_Fuzzing_Machine()
+    EFM=Extreme_Fuzzing_Machine(logger=logger)
     tcp_conn.sendall(b"start")
 
     while True:

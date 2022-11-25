@@ -184,3 +184,6 @@ Shared memory set up
 
 -Add memory warning for ASAN IF EXITING EARLY?
 -FFMPEG: reduce files to way below 10 000 and listen to Pdcst again
+
+Check running args in nn.py are doing it prooperly with the @@...
+OOM error with large edge contexts in coomplicated programs??

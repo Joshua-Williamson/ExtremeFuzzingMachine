@@ -2,7 +2,8 @@ import os
 import sys
 import queue
 import re
-
+import subprocess
+import shlex
 import utils
 
 
@@ -15,8 +16,9 @@ class Node:
 
 
 class FlowBuilder:
-    def __init__(self, bin_file: str):
+    def __init__(self, bin_file: str, logger):
         self.bin_file = bin_file
+        self.logger = logger
 
         self.cf_dir = './flow'
         self.target = bin_file[bin_file.rfind('/') + 1:]
@@ -169,6 +171,8 @@ class FlowBuilder:
                     child_node.parents.add(n)
 
     def init_work_env(self):
+        self.strip_search()
+
         if not os.path.exists(self.cf_dir):
             os.mkdir(self.cf_dir)
         if not os.path.exists(self.dump_target):
@@ -242,6 +246,32 @@ class FlowBuilder:
                         continue
                     new_addr.append(int(addr[i].strip()))
                 self.next_pc[int(tmp[0])] = new_addr
+    
+    def strip_search(self): #lol
+        """ If binary is stripped it won't find any of the afl instumentation
+            Actually, it won't even find main. So therefore we must check
+        """
+        strip_cmd = f'file {self.bin_file}'
+        try:
+            output = str(subprocess.check_output(shlex.split(strip_cmd)))
+        except:
+            err_msg = "file command failed, is it installed in your OS?"
+            self.logger('ERROR: ' + err_msg + '\n' + output)
+            raise RuntimeError(err_msg + '\n' + output)
 
-if __name__ == '__main__':
-    FlowBuilder(sys.argv[1])
+        if "not stripped" in output:
+            return
+        
+        elif "stripped" in output:
+            err_msg = "Binary target has all symbols striped from it, meaning edge context will not work \n \
+                        if you have source code recompile without stripping the binary. \n \n \
+                        I am working on a version that will be able to do this on black box code or disable \n \
+                        the edge context functionality. But until then I'm very sorry"
+            self.logger('ERROR: ' + err_msg)
+            raise RuntimeError(err_msg)
+        
+        
+        else:
+            err_msg = "Edge context script cannot work out if this binary is stripped or not..."
+            self.logger('ERROR: ' + err_msg)
+            raise RuntimeError(err_msg + '\n' + output)
