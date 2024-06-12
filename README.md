@@ -26,6 +26,19 @@ Additionally many of the other improvement include a lot of code repurposed from
 
  Improvements on the usability and quality of life improvents have been made upon the orignal NEUZZ program.
 
+ ## Results
+Here are some results from EFM, there have been updates since, so I believe that these results may have been imporved upon since.
+  
+<p float="left">
+  <img src="docs/results2.png?raw=true" width="400" />
+  <img src="docs/results3.png?raw=true" width="400" /> 
+  <img src="docs/results4.png?raw=true" width="400" /> 
+</p>
+
+You can also see the slides from the presentation in the documents.
+
+
+
 ## Requirements : 
 
  This program has been tested on Ubuntu 20.04, although it should work on most conventional distro's. I advise you run this on a VM or some burner hardware as fuzzing in general is bad for your hard drive. Or, run with the output directory on a ramdisk.
